@@ -1,0 +1,6 @@
+{
+  "name": "Santuário Digital",
+  "description": "Totem interativo para pedidos de oração, check-in em eventos, dízimos e ofertas e cadastro de novos membros.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

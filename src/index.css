@@ -1,0 +1,502 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, sans-serif;
+  
+  --color-brand-red: #e30613;
+  --color-brand-red-hover: #c61118;
+  --color-brand-dark: #0a0a0a;
+  --color-brand-charcoal: #1c1b1d;
+  --color-brand-light: #f4f6f8;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+}
+
+/* Dashboard totem — grid 2×3 preenchendo a tela */
+:root {
+  --dashboard-header-h: clamp(5.75rem, 14vh, 7.75rem);
+}
+
+.dashboard-fullscreen {
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+
+.dashboard-header {
+  min-height: var(--dashboard-header-h);
+}
+
+.dashboard-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-top: calc(var(--dashboard-header-h) + clamp(0.75rem, 2vh, 1.25rem));
+  padding-bottom: clamp(6.5rem, 16vh, 8.5rem);
+  padding-left: clamp(0.75rem, 2vw, 1.5rem);
+  padding-right: clamp(0.75rem, 2vw, 1.5rem);
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(clamp(8rem, 21vh, 12rem), 1fr));
+  gap: clamp(0.75rem, 2.2vmin, 1.35rem);
+  row-gap: clamp(0.875rem, 2.5vmin, 1.5rem);
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 72rem;
+  margin-inline: auto;
+}
+
+.dashboard-card {
+  min-height: clamp(8rem, 21vh, 12rem);
+  height: 100%;
+}
+
+@media (max-width: 479px) {
+  .dashboard-fullscreen {
+    overflow-y: auto;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: repeat(6, minmax(8rem, 1fr));
+    min-height: calc(100dvh - 10rem);
+  }
+}
+
+/* Novo Membro — seletor de modo em visão totem (cards lado a lado) */
+:root {
+  --newmember-header-h: clamp(3.25rem, 7.5vh, 4.75rem);
+}
+
+.newmember-selector-fullscreen {
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+
+.newmember-selector-header {
+  min-height: var(--newmember-header-h);
+}
+
+.newmember-selector-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-top: calc(var(--newmember-header-h) + 0.2rem);
+  padding-bottom: clamp(3rem, 7vh, 3.75rem);
+  padding-left: clamp(0.5rem, 1.2vw, 1.25rem);
+  padding-right: clamp(0.5rem, 1.2vw, 1.25rem);
+}
+
+.newmember-selector-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+  gap: clamp(0.5rem, 1.2vw, 1rem);
+  width: 100%;
+  height: 100%;
+}
+
+.newmember-selector-card {
+  min-height: 0;
+  height: 100%;
+  padding: clamp(1.5rem, 3.5vh, 2.75rem);
+  border-radius: clamp(1rem, 2vw, 2rem);
+}
+
+.logo-white {
+  filter: brightness(0) invert(1) !important;
+}
+
+
+/* ============================================
+   SPLASH SCREEN — PREMIUM ANIMATIONS
+   GPU-accelerated, WCAG AA compliant
+   ============================================ */
+
+/* Fade in base */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in { animation: fadeIn 0.5s ease-out forwards; }
+
+/* Ken Burns — slow zoom for carousel BG */
+@keyframes kenBurns {
+  0%   { transform: scale(1.00) translate(0%, 0%); }
+  50%  { transform: scale(1.08) translate(-1%, 0.5%); }
+  100% { transform: scale(1.12) translate(0.5%, -0.5%); }
+}
+.ken-burns {
+  animation: kenBurns 18s ease-in-out infinite alternate;
+  will-change: transform;
+  transform-origin: center center;
+}
+
+/* Particle float */
+@keyframes particleFloat {
+  0%   { transform: translateY(0px) translateX(0px);   opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 0.6; }
+  100% { transform: translateY(-120px) translateX(20px); opacity: 0; }
+}
+.particle {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  will-change: transform, opacity;
+  animation: particleFloat linear infinite;
+}
+
+/* CTA Pulse with golden glow */
+@keyframes ctaPulse {
+  0%   { box-shadow: 0 0 20px rgba(245,195,30,.35), 0 0 40px rgba(245,195,30,.20), 0 0 0 0 rgba(245,195,30,.50); }
+  70%  { box-shadow: 0 0 20px rgba(245,195,30,.35), 0 0 40px rgba(245,195,30,.20), 0 0 0 22px rgba(245,195,30,0); }
+  100% { box-shadow: 0 0 20px rgba(245,195,30,.35), 0 0 40px rgba(245,195,30,.20), 0 0 0 0  rgba(245,195,30,0); }
+}
+.animate-cta-pulse { animation: ctaPulse 2.2s ease-out infinite; }
+
+/* Icon bounce — smooth, reduced amplitude */
+@keyframes handBounce {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  30%       { transform: translateY(-4px) rotate(-2deg); }
+  60%       { transform: translateY(-2px) rotate(1deg); }
+}
+.animate-hand-bounce { animation: handBounce 1.6s ease-in-out infinite; }
+
+/* Badge pulse dot */
+@keyframes pulseDot {
+  0%, 100% { transform: scale(1);   opacity: 1; }
+  50%       { transform: scale(1.5); opacity: 0.5; }
+}
+.animate-pulse-dot { animation: pulseDot 2s infinite; }
+
+/* Shine — 0.8s diagonal sweep */
+.btn-shine {
+  position: relative;
+  overflow: hidden;
+}
+.btn-shine::after {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -75%;
+  width: 40%;
+  height: 200%;
+  background: linear-gradient(
+    105deg,
+    rgba(255,255,255,0)    0%,
+    rgba(255,255,255,0.32) 50%,
+    rgba(255,255,255,0)    100%
+  );
+  transform: skewX(-20deg);
+  opacity: 0;
+  pointer-events: none;
+  transition: none;
+}
+.btn-shine:hover::after,
+.btn-shine:active::after {
+  left: 130%;
+  opacity: 1;
+  transition: left 0.8s cubic-bezier(.4,0,.2,1), opacity 0.1s;
+}
+
+/* Slide text reveal */
+@keyframes slideReveal {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.slide-reveal { animation: slideReveal 0.6s cubic-bezier(.4,0,.2,1) forwards; }
+
+/* Logo placeholder ring pulse */
+@keyframes ringPulse {
+  0%, 100% { box-shadow: 0 0 20px rgba(245,195,30,.25), 0 0 40px rgba(245,195,30,.10); }
+  50%       { box-shadow: 0 0 30px rgba(245,195,30,.40), 0 0 60px rgba(245,195,30,.20); }
+}
+.logo-ring-pulse { animation: ringPulse 3s ease-in-out infinite; }
+
+/* Backdrop slide fade */
+@keyframes slideFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* General fade */
+.animate-fade-in-slow {
+  animation: fadeIn 1.2s ease-out forwards;
+}
+
+/* Material Icons size utilities */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 48;
+}
+
+.material-symbols-fill {
+  font-variation-settings: 'FILL' 1, 'wght' 300, 'GRAD' 0, 'opsz' 48;
+}
+
+/* Ripple and tap effects for kiosk feeling */
+.key-tap {
+  transition: transform 0.1s ease, background-color 0.1s ease;
+}
+
+.key-tap:active {
+  transform: scale(0.94);
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Scan animation */
+@keyframes scan {
+  0% { top: 0%; }
+  100% { top: 100%; }
+}
+
+.scan-line {
+  animation: scan 3s linear infinite;
+}
+
+/* Accessibility Theme: High Contrast */
+.high-contrast-active {
+  background: #000000 !important;
+  color: #ffff00 !important;
+}
+
+.high-contrast-active .bg-white,
+.high-contrast-active .bg-slate-50,
+.high-contrast-active .bg-slate-100,
+.high-contrast-active .bg-\[\#f4f6f8\],
+.high-contrast-active .bg-\[\#e6e8eb\],
+.high-contrast-active .bg-slate-200,
+.high-contrast-active .bg-brand-light {
+  background-color: #000000 !important;
+  background-image: none !important;
+  color: #ffff00 !important;
+  border-color: #ffff00 !important;
+}
+
+.high-contrast-active header,
+.high-contrast-active nav,
+.high-contrast-active footer {
+  background-color: #000000 !important;
+  border-color: #ffff00 !important;
+}
+
+.high-contrast-active button,
+.high-contrast-active input,
+.high-contrast-active select,
+.high-contrast-active textarea {
+  background-color: #000000 !important;
+  color: #ffff00 !important;
+  border: 2px solid #ffff00 !important;
+}
+
+.high-contrast-active button:hover,
+.high-contrast-active button:active,
+.high-contrast-active .bg-brand-red {
+  background-color: #ffff00 !important;
+  color: #000000 !important;
+  border-color: #ffff00 !important;
+}
+
+.high-contrast-active .bg-brand-dark,
+.high-contrast-active .bg-\[\#0a0a0a\],
+.high-contrast-active .bg-\[\#121212\] {
+  background-color: #000000 !important;
+  color: #ffff00 !important;
+  border-color: #ffff00 !important;
+}
+
+.high-contrast-active .text-slate-500,
+.high-contrast-active .text-slate-600,
+.high-contrast-active .text-slate-700,
+.high-contrast-active .text-brand-dark,
+.high-contrast-active .text-\[\#191c1e\],
+.high-contrast-active .text-\[\#43474d\],
+.high-contrast-active .text-slate-400,
+.high-contrast-active .text-slate-450 {
+  color: #ffff00 !important;
+}
+
+.high-contrast-active .text-brand-red {
+  color: #ffff00 !important;
+  text-decoration: underline;
+}
+
+.high-contrast-active .material-symbols-outlined,
+.high-contrast-active .material-symbols-fill {
+  color: #ffff00 !important;
+}
+
+/* Accessibility Theme: Text Zoom */
+.text-zoom-active {
+  font-size: 1.25rem !important;
+}
+
+.text-zoom-active h1 {
+  font-size: 2.5rem !important;
+}
+
+.text-zoom-active h2 {
+  font-size: 2rem !important;
+}
+
+.text-zoom-active p,
+.text-zoom-active span,
+.text-zoom-active button,
+.text-zoom-active label,
+.text-zoom-active input {
+  font-size: 1.35rem !important;
+}
+
+.text-zoom-active button {
+  padding-top: 1rem !important;
+  padding-bottom: 1rem !important;
+  min-height: 4.5rem !important;
+}
+
+.text-zoom-active footer,
+.text-zoom-active header,
+.text-zoom-active nav {
+  height: auto !important;
+  padding-top: 1.5rem !important;
+  padding-bottom: 1.5rem !important;
+}
+
+/* Scrollbar styling for touch screens and totems */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
+/* Elegant scrollbar details for standard scrolling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Totem/Kiosk touch, zoom and select restrictions */
+body, button, a, img {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation; /* Disables double-tap to zoom natively */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Allow text selection inside forms */
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Enhanced interactive Home button animation and styling */
+@keyframes homePulse {
+  0%, 100% {
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15), 0 0 0 0 rgba(var(--color-brand-red-rgb), 0.4);
+  }
+  50% {
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25), 0 0 0 12px rgba(var(--color-brand-red-rgb), 0);
+  }
+}
+.animate-home-pulse {
+  animation: homePulse 2s infinite ease-in-out;
+}
+.home-btn-hover:hover {
+  transform: scale(1.08) translateY(-2px);
+  filter: brightness(1.1);
+}
+.home-btn-hover:active {
+  transform: scale(0.95) translateY(0);
+}
+
+/* ==========================================================================
+   SUBMODULES LEGIBILIDADE AUMENTADA (Aumento de fonte de subpáginas)
+   ========================================================================== */
+.submodule-view {
+  font-size: 1.15rem;
+}
+.submodule-view p, 
+.submodule-view span:not(.material-symbols-outlined):not(.material-symbols-fill), 
+.submodule-view label,
+.submodule-view button:not(.home-btn-hover):not(.bg-brand-red), 
+.submodule-view input, 
+.submodule-view select {
+  font-size: 1.15rem !important;
+}
+.submodule-view h1 {
+  font-size: 2.25rem !important;
+}
+.submodule-view h2 {
+  font-size: 1.85rem !important;
+}
+.submodule-view h3 {
+  font-size: 1.55rem !important;
+}
+.submodule-view h4 {
+  font-size: 1.3rem !important;
+}
+.submodule-view .text-xs {
+  font-size: 0.95rem !important;
+}
+.submodule-view .text-sm {
+  font-size: 1.05rem !important;
+}
+.submodule-view .text-\[9px\] {
+  font-size: 0.85rem !important;
+}
+.submodule-view .text-\[10px\] {
+  font-size: 0.9rem !important;
+}
+
+/* Custom slide up animation for floating promotional popups */
+@keyframes slideUpPopup {
+  from { opacity: 0; transform: translate(-50%, 100px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+.animate-slide-up-popup {
+  animation: slideUpPopup 0.75s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+
+

@@ -1,0 +1,9 @@
+{
+  "env": {
+    "NEXT_PUBLIC_SUPABASE_URL": "https://tyekzbzzqkykwlcfzlve.supabase.co",
+    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_pLh64CdkPHmERxOFEtbo8A_cHUdTSjm"
+  },
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

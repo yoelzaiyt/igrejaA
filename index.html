@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="pt-BR" class="light">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      try {
+        var stored = localStorage.getItem('santuario_brands');
+        if (stored) {
+          var parsed = JSON.parse(stored);
+          var changed = false;
+          if (parsed.ymcactx) {
+            delete parsed.ymcactx;
+            changed = true;
+          }
+          if (parsed.imocarwash) {
+            delete parsed.imocarwash;
+            changed = true;
+          }
+          if (parsed.atitude) {
+            if (parsed.atitude.logoUrl === 'https://igrejaatitude.com.br/wp-content/themes/ibatitude/images/logo.png' || (parsed.atitude.logoUrl && !parsed.atitude.logoUrl.includes('i0.wp.com'))) {
+              parsed.atitude.logoUrl = 'https://i0.wp.com/igrejaatitude.com.br/wp-content/themes/ibatitude/images/logo.png';
+              changed = true;
+            }
+            if (parsed.atitude.bgUrl === 'https://igrejaatitude.com.br/wp-content/uploads/2025/03/hall-iba.png' || (parsed.atitude.bgUrl && !parsed.atitude.bgUrl.includes('i0.wp.com'))) {
+              parsed.atitude.bgUrl = 'https://i0.wp.com/igrejaatitude.com.br/wp-content/uploads/2025/03/hall-iba.png';
+              changed = true;
+            }
+            if (parsed.atitude.slides) {
+              parsed.atitude.slides = parsed.atitude.slides.map(function(s) {
+                if (s.bgUrl && s.bgUrl.includes('igrejaatitude.com.br') && !s.bgUrl.includes('i0.wp.com')) {
+                  s.bgUrl = s.bgUrl.replace('https://igrejaatitude.com.br', 'https://i0.wp.com/igrejaatitude.com.br');
+                  changed = true;
+                }
+                return s;
+              });
+            }
+          }
+          if (changed) {
+            localStorage.setItem('santuario_brands', JSON.stringify(parsed));
+          }
+        }
+      } catch (e) {
+        console.error('LocalStorage cleanup error:', e);
+      }
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Santuário Digital - Atitude Alphaville</title>
+    <!-- Google Fonts: Inter & Montserrat -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Montserrat:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <!-- Material Symbols Outlined -->
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet" />
+  </head>
+  <body class="bg-[#f7f9fc] text-[#191c1e] antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
