@@ -24,6 +24,7 @@ export interface BrandConfig {
   location: string;
   wifi: string;
   pixKey: string;
+  whatsappNumber?: string;
   pastors: Pastor[];
   cellGroups: CellGroup[];
   glowColor: string;

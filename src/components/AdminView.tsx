@@ -5,6 +5,7 @@ import { playTapSound, playSuccessSound } from '../utils/audio';
 import { speakText } from '../utils/tts';
 import { Lang } from '../utils/i18n';
 import { clearRegistrations, deleteRegistration, fetchRegistrations, TotemRegistration } from '../lib/registrations';
+import { DEFAULT_WHATSAPP_NUMBER, openWhatsAppNotification } from '../utils/whatsapp';
 
 interface AdminViewProps {
   onBack: () => void;
@@ -207,6 +208,25 @@ export default function AdminView({ onBack, brand: activeBrand, lang }: AdminVie
     playTapSound();
     const updatedSlides = (currentEditingBrand.slides || []).filter((_, i) => i !== index);
     handleFieldChange('slides', updatedSlides);
+  };
+
+  // WhatsApp notification for a received registration/request
+  const handleNotifyWhatsApp = (reg: TotemRegistration) => {
+    playTapSound();
+    const regBrand = allBrands[reg.brandId];
+    const number = regBrand?.whatsappNumber || DEFAULT_WHATSAPP_NUMBER;
+    const dateFormatted = new Date(reg.date).toLocaleString('pt-BR');
+    const message = [
+      `*Novo registro no Totem${regBrand ? ` — ${regBrand.name}` : ''}*`,
+      `Tipo: ${reg.type}`,
+      `Nome: ${reg.name}`,
+      reg.phone && reg.phone !== '-' ? `Telefone: ${reg.phone}` : null,
+      reg.email && reg.email !== '-' ? `E-mail: ${reg.email}` : null,
+      `Data: ${dateFormatted}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    openWhatsAppNotification(number, message);
   };
 
   return (
@@ -425,6 +445,18 @@ export default function AdminView({ onBack, brand: activeBrand, lang }: AdminVie
                       onChange={(e) => handleFieldChange('wifi', e.target.value)}
                       className="w-full bg-white border border-slate-300 rounded-xl p-3 text-slate-800 font-semibold text-sm focus:border-slate-800 outline-none"
                     />
+                  </div>
+
+                  <div className="space-y-1.5 md:col-span-2">
+                    <label className="text-xs uppercase tracking-wider font-extrabold text-slate-500">WhatsApp para Notificações (Admin/Pastoral)</label>
+                    <input
+                      type="text"
+                      value={currentEditingBrand.whatsappNumber || ''}
+                      onChange={(e) => handleFieldChange('whatsappNumber', e.target.value)}
+                      placeholder={`Ex: ${DEFAULT_WHATSAPP_NUMBER} (DDI+DDD+número)`}
+                      className="w-full bg-white border border-slate-300 rounded-xl p-3 text-slate-800 font-semibold text-sm focus:border-slate-800 outline-none"
+                    />
+                    <p className="text-[10px] text-slate-400 font-semibold">Número que recebe os avisos de novos cadastros/pedidos pela aba "Cadastros & Solicitações".</p>
                   </div>
 
                   <div className="space-y-1.5 md:col-span-2">
@@ -1069,17 +1101,27 @@ export default function AdminView({ onBack, brand: activeBrand, lang }: AdminVie
                                   </span>
                                 </td>
                                 <td className="p-4 text-center">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      playTapSound();
-                                      void deleteRegistration(reg.id).then(setRegistrations);
-                                    }}
-                                    className="w-8 h-8 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center transition-colors cursor-pointer mx-auto"
-                                    title="Remover Registro"
-                                  >
-                                    <span className="material-symbols-outlined !text-lg">delete</span>
-                                  </button>
+                                  <div className="flex items-center justify-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleNotifyWhatsApp(reg)}
+                                      className="w-8 h-8 rounded-full text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 flex items-center justify-center transition-colors cursor-pointer"
+                                      title="Notificar via WhatsApp"
+                                    >
+                                      <span className="material-symbols-outlined !text-lg">chat</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        playTapSound();
+                                        void deleteRegistration(reg.id).then(setRegistrations);
+                                      }}
+                                      className="w-8 h-8 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center transition-colors cursor-pointer"
+                                      title="Remover Registro"
+                                    >
+                                      <span className="material-symbols-outlined !text-lg">delete</span>
+                                    </button>
+                                  </div>
                                 </td>
                               </tr>
                             );
