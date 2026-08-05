@@ -729,21 +729,21 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
               />
               <div className="relative z-10 flex flex-col items-center w-full">
                 {pixLoading && (
-                  <div className="w-56 h-56 flex flex-col items-center justify-center gap-3 text-slate-500">
+                  <div className="w-80 h-80 md:w-96 md:h-96 flex flex-col items-center justify-center gap-3 text-slate-500">
                     <span className="material-symbols-outlined !text-5xl animate-spin">progress_activity</span>
                     <span className="text-xs font-black uppercase tracking-wider">Gerando PIX real...</span>
                   </div>
                 )}
 
                 {!pixLoading && pixError && (
-                  <div className="w-56 h-56 flex flex-col items-center justify-center gap-3 text-red-500 text-center px-4">
+                  <div className="w-80 h-80 md:w-96 md:h-96 flex flex-col items-center justify-center gap-3 text-red-500 text-center px-4">
                     <span className="material-symbols-outlined !text-5xl">error</span>
                     <span className="text-xs font-bold">{pixError}</span>
                   </div>
                 )}
 
                 {!pixLoading && !pixError && state.mpQrCodeBase64 && (
-                  <div className="relative w-56 h-56 group border-2 border-brand-red/20 rounded-2xl overflow-hidden p-1 shadow-inner bg-slate-50">
+                  <div className="relative w-80 h-80 md:w-96 md:h-96 group border-2 border-brand-red/20 rounded-2xl overflow-hidden p-1 shadow-inner bg-slate-50">
                     <img
                       className="w-full h-full object-contain rounded-xl pointer-events-none opacity-90"
                       src={`data:image/png;base64,${state.mpQrCodeBase64}`}

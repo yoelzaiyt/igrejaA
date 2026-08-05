@@ -51,6 +51,16 @@ export default function App() {
   const rawBrand = getCurrentBrand();
   const brand = translateBrandTerms(rawBrand, lang);
 
+  // Remote admin entry point (?admin=true): skip straight to the passcode
+  // prompt instead of requiring the gear icon on the public totem screen.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('admin') === 'true') {
+      setShowAdminPasscodeModal(true);
+    }
+  }, []);
+
   // Kiosk Mode Defenses (context menu and keyboard shortcuts block)
   useEffect(() => {
     const disableContextMenu = (e: MouseEvent) => {
