@@ -123,12 +123,172 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
   const [pixTimer, setPixTimer] = useState(300);
   const [copied, setCopied] = useState(false);
   const [hoveredCategoryBg, setHoveredCategoryBg] = useState<string | null>(null);
+  const [pixLoading, setPixLoading] = useState(false);
+  const [pixError, setPixError] = useState('');
+  const [checkingNow, setCheckingNow] = useState(false);
+  const [cardError, setCardError] = useState('');
+  const [cardProcessing, setCardProcessing] = useState(false);
+  const [brickReady, setBrickReady] = useState(false);
 
+  // Load the Mercado Pago SDK once, when the real credit-card step is reached.
+  useEffect(() => {
+    if (state.step !== 'mp_card') return;
+
+    setCardError('');
+    setBrickReady(false);
+
+    const publicKey = import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY;
+    if (!publicKey) {
+      setCardError('Mercado Pago não configurado (chave pública ausente).');
+      return;
+    }
+
+    let cancelled = false;
+    let brickController: { unmount?: () => void } | null = null;
+
+    const mount = async () => {
+      if (!(window as any).MercadoPago) {
+        await new Promise<void>((resolve, reject) => {
+          const existing = document.getElementById('mp-sdk-script');
+          if (existing) {
+            existing.addEventListener('load', () => resolve());
+            return;
+          }
+          const script = document.createElement('script');
+          script.id = 'mp-sdk-script';
+          script.src = 'https://sdk.mercadopago.com/js/v2';
+          script.onload = () => resolve();
+          script.onerror = () => reject(new Error('Falha ao carregar SDK do Mercado Pago'));
+          document.head.appendChild(script);
+        });
+      }
+      if (cancelled) return;
+
+      const mp = new (window as any).MercadoPago(publicKey, { locale: 'pt-BR' });
+      const bricksBuilder = mp.bricks();
+
+      brickController = await bricksBuilder.create('cardPayment', 'mp-card-brick-container', {
+        initialization: { amount: state.value },
+        customization: {
+          visual: { style: { theme: 'default' } },
+          paymentMethods: { maxInstallments: 1 },
+        },
+        callbacks: {
+          onReady: () => {
+            if (!cancelled) setBrickReady(true);
+          },
+          onError: (error: unknown) => {
+            console.error('Mercado Pago Brick error:', error);
+            if (!cancelled) setCardError('Erro no formulário de cartão. Tente novamente.');
+          },
+          onSubmit: (cardFormData: any) => {
+            return new Promise<void>((resolve, reject) => {
+              setCardProcessing(true);
+              setCardError('');
+              fetch('/api/create-payment', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  method: 'credit',
+                  amount: state.value,
+                  description: `${state.category} - ${brand.name}`,
+                  brandId: brand.id,
+                  card: cardFormData,
+                }),
+              })
+                .then((res) => res.json())
+                .then((data) => {
+                  setCardProcessing(false);
+                  if (data.status === 'approved') {
+                    setState((prev) => ({ ...prev, mpPaymentId: data.id }));
+                    handleCompletePayment();
+                    resolve();
+                  } else {
+                    setCardError(
+                      data.status === 'rejected'
+                        ? 'Pagamento recusado pela operadora do cartão. Tente outro cartão.'
+                        : `Pagamento não aprovado (${data.status_detail || data.status || 'erro'}).`
+                    );
+                    reject();
+                  }
+                })
+                .catch((err) => {
+                  console.error(err);
+                  setCardProcessing(false);
+                  setCardError('Falha de conexão ao processar o pagamento.');
+                  reject();
+                });
+            });
+          },
+        },
+      });
+    };
+
+    mount().catch((err) => {
+      console.error(err);
+      if (!cancelled) setCardError('Não foi possível carregar o formulário de pagamento.');
+    });
+
+    return () => {
+      cancelled = true;
+      brickController?.unmount?.();
+    };
+  }, [state.step]);
+
+  // Real PIX charge: create it with Mercado Pago as soon as this step opens.
   useEffect(() => {
     if (state.step !== 'pix') return;
 
+    let cancelled = false;
     setPixTimer(300);
-    speakText(`Código PIX gerado no valor de R$ ${state.value.toFixed(2)}. Aponte o celular ou copie a chave para pagar.`);
+    setPixError('');
+    setPixLoading(true);
+    speakText(`Gerando código PIX no valor de R$ ${state.value.toFixed(2)}.`);
+
+    (async () => {
+      try {
+        const res = await fetch('/api/create-payment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            method: 'pix',
+            amount: state.value,
+            description: `${state.category} - ${brand.name}`,
+            brandId: brand.id,
+          }),
+        });
+        const data = await res.json();
+        if (cancelled) return;
+        if (!res.ok || !data.qr_code) {
+          setPixError('Não foi possível gerar o PIX agora. Tente novamente.');
+          setPixLoading(false);
+          return;
+        }
+        setState((prev) => ({
+          ...prev,
+          mpPaymentId: data.id,
+          mpQrCode: data.qr_code,
+          mpQrCodeBase64: data.qr_code_base64,
+        }));
+        setPixLoading(false);
+        speakText('Código PIX pronto. Aponte o celular ou copie a chave para pagar.');
+      } catch (e) {
+        if (!cancelled) {
+          console.error(e);
+          setPixError('Falha de conexão ao gerar o PIX.');
+          setPixLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [state.step]);
+
+  // Countdown display for the real PIX expiration window.
+  useEffect(() => {
+    if (state.step !== 'pix' || pixLoading) return;
 
     const timer = setInterval(() => {
       setPixTimer((prev) => {
@@ -141,14 +301,53 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [state.step, state.value]);
+  }, [state.step, pixLoading]);
+
+  // Poll Mercado Pago for real confirmation instead of a fake timer.
+  useEffect(() => {
+    if (state.step !== 'pix' || !state.mpPaymentId) return;
+
+    const poll = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/check-payment?id=${state.mpPaymentId}`);
+        const data = await res.json();
+        if (data.status === 'approved') {
+          clearInterval(poll);
+          handleCompletePayment();
+        }
+      } catch (e) {
+        console.error('Falha ao checar status do PIX:', e);
+      }
+    }, 4000);
+
+    return () => clearInterval(poll);
+  }, [state.step, state.mpPaymentId]);
+
+  const handleCheckNow = async () => {
+    if (!state.mpPaymentId) return;
+    setCheckingNow(true);
+    playTapSound();
+    try {
+      const res = await fetch(`/api/check-payment?id=${state.mpPaymentId}`);
+      const data = await res.json();
+      if (data.status === 'approved') {
+        handleCompletePayment();
+      } else {
+        speakText('Ainda não identificamos o pagamento. Aguarde alguns segundos após pagar.');
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setCheckingNow(false);
+    }
+  };
 
   useEffect(() => {
     if (state.step !== 'card') return;
 
-    speakText(`Aguardando pagamento no cartão no valor de R$ ${state.value.toFixed(2)}. Por favor, insira ou aproxime o seu cartão na maquininha.`);
+    speakText(`Aguardando pagamento no cartão de débito no valor de R$ ${state.value.toFixed(2)}. Por favor, insira ou aproxime o seu cartão na maquininha.`);
 
-    // Auto-simulate card reading success after 6 seconds
+    // Debit still runs as a kiosk-terminal simulation.
     const timer = setTimeout(() => {
       handleCompletePayment();
     }, 6000);
@@ -163,8 +362,9 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
   };
 
   const handleCopyKey = () => {
+    if (!state.mpQrCode) return;
     playSuccessSound();
-    navigator.clipboard.writeText(brand.pixKey);
+    navigator.clipboard.writeText(state.mpQrCode);
     setCopied(true);
     speakText('Chave Copiada');
     setTimeout(() => setCopied(false), 3000);
@@ -232,12 +432,13 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
 
   const handleCompletePayment = () => {
     // Save registration to localStorage
+    const methodLabel = state.paymentMethod === 'pix' ? 'PIX' : state.paymentMethod === 'credit' ? 'Crédito' : 'Débito';
     const newReg = {
       id: `donation_${Date.now()}`,
       name: `Contribuição no Valor de R$ ${state.value.toFixed(2)}`,
       phone: '-',
       email: '-',
-      type: `${brand.termDonation}: ${state.category} (${state.paymentMethod === 'pix' ? 'PIX' : 'Cartão'})`,
+      type: `${brand.termDonation}: ${state.category} (${methodLabel}${state.mpPaymentId ? ` - MP#${state.mpPaymentId}` : ''})`,
       brandId: brand.id,
       date: new Date().toISOString()
     };
@@ -252,7 +453,7 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
     playTapSound();
     if (state.step === 'value') setState(prev => ({ ...prev, step: 'category' }));
     else if (state.step === 'method') setState(prev => ({ ...prev, step: 'value' }));
-    else if (state.step === 'pix' || state.step === 'card') setState(prev => ({ ...prev, step: 'method' }));
+    else if (state.step === 'pix' || state.step === 'card' || state.step === 'mp_card') setState(prev => ({ ...prev, step: 'method' }));
     else onBack();
   };
 
@@ -452,12 +653,12 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
                 </div>
               </button>
 
-              {/* Credit Card Method */}
+              {/* Credit Card Method (real Mercado Pago charge) */}
               <button
                 type="button"
                 onClick={() => {
                   playSuccessSound();
-                  setState(prev => ({ ...prev, step: 'card', paymentMethod: 'credit' }));
+                  setState(prev => ({ ...prev, step: 'mp_card', paymentMethod: 'credit' }));
                 }}
                 className="relative overflow-hidden bg-white/95 hover:bg-white rounded-2xl p-8 border-2 border-slate-200 hover:border-brand-red cursor-pointer transition-all flex flex-col items-center text-center justify-between shadow-sm group hover:scale-[1.05] active:scale-[0.96] transition-all duration-300 min-h-[300px]"
               >
@@ -527,50 +728,74 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
                 style={{ backgroundImage: `url(${brand.bgUrl})`, filter: 'blur(2px)' }}
               />
               <div className="relative z-10 flex flex-col items-center w-full">
-                <div className="relative w-56 h-56 group border-2 border-brand-red/20 rounded-2xl overflow-hidden p-1 shadow-inner bg-slate-50">
-                  <img
-                    className="w-full h-full object-contain rounded-xl pointer-events-none opacity-90"
-                    src="https://lh3.googleusercontent.com/aida-public/AB6AXuB_ptHuYhlDFyDexHL0MXiDWIWBLQywj4JYFKg9lNzTjM1PVcSDD5P9AkpH48mcS9VAxPD0SCLRkTk86Jc0fItS7fLrskbB0D-CE20Mpp83ZXA6R_Hh5hMcdgSSw5OQV6gkjjzmuI2XP6r3pjC5vurY4SgT1g__rD4uRh6b6NVv4x6_TJtVdDwrgfH6FuHvLgiEJFbqa5zc-GQ4YvskFfGOalToE-66bFI3wVUaNPmvV_C8jyNy9FjlE4QSUlPLEoc58jSKl4bAhegS"
-                    alt="PIX QR Code"
-                    referrerPolicy="no-referrer"
-                  />
-                  {/* Scan line overlay */}
-                  <div className="absolute left-0 w-full h-1 bg-brand-red scan-line rounded-full opacity-80" />
-                </div>
+                {pixLoading && (
+                  <div className="w-56 h-56 flex flex-col items-center justify-center gap-3 text-slate-500">
+                    <span className="material-symbols-outlined !text-5xl animate-spin">progress_activity</span>
+                    <span className="text-xs font-black uppercase tracking-wider">Gerando PIX real...</span>
+                  </div>
+                )}
+
+                {!pixLoading && pixError && (
+                  <div className="w-56 h-56 flex flex-col items-center justify-center gap-3 text-red-500 text-center px-4">
+                    <span className="material-symbols-outlined !text-5xl">error</span>
+                    <span className="text-xs font-bold">{pixError}</span>
+                  </div>
+                )}
+
+                {!pixLoading && !pixError && state.mpQrCodeBase64 && (
+                  <div className="relative w-56 h-56 group border-2 border-brand-red/20 rounded-2xl overflow-hidden p-1 shadow-inner bg-slate-50">
+                    <img
+                      className="w-full h-full object-contain rounded-xl pointer-events-none opacity-90"
+                      src={`data:image/png;base64,${state.mpQrCodeBase64}`}
+                      alt="PIX QR Code"
+                    />
+                    {/* Scan line overlay */}
+                    <div className="absolute left-0 w-full h-1 bg-brand-red scan-line rounded-full opacity-80" />
+                  </div>
+                )}
 
                 {/* Countdown timer display */}
-                <div className="mt-4 flex items-center justify-center gap-2 text-slate-700 bg-slate-100 border border-slate-200 px-4 py-2 rounded-xl">
-                  <span className="material-symbols-outlined text-brand-red !text-lg animate-spin">autorenew</span>
-                  <span className="text-xs font-black uppercase tracking-wider">O código expira em:</span>
-                  <span className="text-sm font-extrabold text-brand-red font-mono">{formatTimer(pixTimer)}</span>
-                </div>
+                {!pixLoading && !pixError && (
+                  <div className="mt-4 flex items-center justify-center gap-2 text-slate-700 bg-slate-100 border border-slate-200 px-4 py-2 rounded-xl">
+                    <span className="material-symbols-outlined text-brand-red !text-lg animate-spin">autorenew</span>
+                    <span className="text-xs font-black uppercase tracking-wider">O código expira em:</span>
+                    <span className="text-sm font-extrabold text-brand-red font-mono">{formatTimer(pixTimer)}</span>
+                  </div>
+                )}
 
                 {/* Copy paste button */}
-                <div className="mt-4 w-full">
-                  <button
-                    type="button"
-                    onClick={handleCopyKey}
-                    className="w-full h-12 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-xl font-bold flex items-center justify-center gap-2 cursor-pointer transition-colors active:scale-95 text-xs uppercase tracking-wider"
-                  >
-                    <span className="material-symbols-outlined !text-base">content_copy</span>
-                    <span>{copied ? 'Chave Copiada!' : 'Copiar Chave PIX Copia e Cola'}</span>
-                  </button>
-                </div>
+                {!pixLoading && !pixError && state.mpQrCode && (
+                  <div className="mt-4 w-full">
+                    <button
+                      type="button"
+                      onClick={handleCopyKey}
+                      className="w-full h-12 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-xl font-bold flex items-center justify-center gap-2 cursor-pointer transition-colors active:scale-95 text-xs uppercase tracking-wider"
+                    >
+                      <span className="material-symbols-outlined !text-base">content_copy</span>
+                      <span>{copied ? 'Chave Copiada!' : 'Copiar Chave PIX Copia e Cola'}</span>
+                    </button>
+                  </div>
+                )}
 
                 <p className="text-xs text-slate-500 font-semibold mt-4 leading-relaxed">
-                  Abra o aplicativo do seu banco, selecione a opção "Pagar com PIX/QR Code" e aponte para o código acima para concluir.
+                  Abra o aplicativo do seu banco, selecione a opção "Pagar com PIX/QR Code" e aponte para o código acima para concluir. A confirmação é automática.
                 </p>
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={handleCompletePayment}
-              className="w-full h-16 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-2xl flex items-center justify-center gap-3 cursor-pointer shadow-md active:scale-[0.98] transition-transform text-lg"
-            >
-              <span className="material-symbols-outlined !text-2xl">check_circle</span>
-              <span>Simular Pagamento Confirmado</span>
-            </button>
+            {!pixLoading && !pixError && (
+              <button
+                type="button"
+                onClick={handleCheckNow}
+                disabled={checkingNow}
+                className="w-full h-16 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-black rounded-2xl flex items-center justify-center gap-3 cursor-pointer shadow-md active:scale-[0.98] transition-transform text-lg"
+              >
+                <span className={`material-symbols-outlined !text-2xl ${checkingNow ? 'animate-spin' : ''}`}>
+                  {checkingNow ? 'progress_activity' : 'refresh'}
+                </span>
+                <span>{checkingNow ? 'Verificando...' : 'Já Paguei, Verificar Agora'}</span>
+              </button>
+            )}
           </div>
         )}
 
@@ -646,6 +871,48 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
               <span className="material-symbols-outlined !text-2xl">check_circle</span>
               <span>Simular Cartão Aprovado</span>
             </button>
+          </div>
+        )}
+
+        {/* STEP 3.6: REAL MERCADO PAGO CREDIT CARD PAYMENT */}
+        {state.step === 'mp_card' && (
+          <div className="space-y-6 animate-fade-in text-center max-w-md mx-auto">
+            <header className="space-y-2">
+              <span className="text-xs uppercase tracking-widest font-black text-slate-500 block">Pagamento Real no Cartão de Crédito</span>
+              <h2 className="text-2xl font-black text-brand-dark">Preencha os Dados do Cartão</h2>
+              <div className="text-xl font-extrabold text-brand-red bg-brand-red/10 rounded-full px-6 py-2.5 inline-block border border-brand-red/30 shadow-sm">
+                Valor: R$ {state.value.toFixed(2)} ({state.category})
+              </div>
+            </header>
+
+            <div className="relative overflow-hidden bg-white rounded-3xl p-4 md:p-6 border-2 border-slate-200 shadow-lg text-left">
+              {cardError && (
+                <div className="mb-4 flex items-center gap-2 text-red-600 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm font-bold">
+                  <span className="material-symbols-outlined !text-xl">error</span>
+                  <span>{cardError}</span>
+                </div>
+              )}
+
+              {cardProcessing && (
+                <div className="mb-4 flex items-center gap-2 text-slate-600 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold">
+                  <span className="material-symbols-outlined !text-xl animate-spin">progress_activity</span>
+                  <span>Processando pagamento...</span>
+                </div>
+              )}
+
+              {!brickReady && !cardError && (
+                <div className="flex items-center justify-center gap-2 text-slate-500 py-10">
+                  <span className="material-symbols-outlined !text-3xl animate-spin">progress_activity</span>
+                  <span className="text-sm font-bold">Carregando formulário seguro...</span>
+                </div>
+              )}
+
+              <div id="mp-card-brick-container" />
+            </div>
+
+            <p className="text-xs text-slate-500 font-semibold leading-relaxed">
+              Pagamento processado diretamente pelo Mercado Pago. Os dados do cartão não passam pelo servidor do totem.
+            </p>
           </div>
         )}
 

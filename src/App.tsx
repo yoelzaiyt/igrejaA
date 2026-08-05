@@ -58,17 +58,24 @@ export default function App() {
     };
 
     const disableKeyCombos = (e: KeyboardEvent) => {
-      // Disable F12, Ctrl+Shift+I/J, Ctrl+U/S (common DevTools / page escape keys)
+      // Disable F12, Ctrl+Shift+I/J, Ctrl+U/S/P (DevTools / page escape / native print dialog keys)
       if (
         e.key === 'F12' ||
         (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'i' || e.key === 'J' || e.key === 'j')) ||
-        (e.ctrlKey && (e.key === 'U' || e.key === 'u' || e.key === 'S' || e.key === 's'))
+        (e.ctrlKey && (e.key === 'U' || e.key === 'u' || e.key === 'S' || e.key === 's' || e.key === 'P' || e.key === 'p'))
       ) {
         e.preventDefault();
       }
     };
 
+    // Belt-and-suspenders: window.print() opens the OS-native print dialog,
+    // which blocks the kiosk screen waiting for human input on a totem no
+    // one is meant to interact with directly. Neutralize it no matter what
+    // triggers it (stray Ctrl+P past the guard above, a future button, a
+    // third-party library).
+    const originalPrint = typeof window !== 'undefined' ? window.print : undefined;
     if (typeof window !== 'undefined') {
+      window.print = () => {};
       window.addEventListener('contextmenu', disableContextMenu);
       window.addEventListener('keydown', disableKeyCombos);
     }
@@ -77,6 +84,7 @@ export default function App() {
       if (typeof window !== 'undefined') {
         window.removeEventListener('contextmenu', disableContextMenu);
         window.removeEventListener('keydown', disableKeyCombos);
+        if (originalPrint) window.print = originalPrint;
       }
     };
   }, []);
