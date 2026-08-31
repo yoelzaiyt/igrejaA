@@ -8,6 +8,7 @@ import { BrandConfig } from '../utils/brand';
 
 import { Lang } from '../utils/i18n';
 import { saveRegistration } from '../lib/registrations';
+import { startAttempt, getOpenAttempt, updateAttempt, clearAttempt } from '../lib/paymentAttempt';
 
 interface DonationViewProps {
   onBack: () => void;
@@ -16,7 +17,24 @@ interface DonationViewProps {
   lang: Lang;
   initialStep?: 'category' | 'value' | 'method';
   initialCategory?: string;
+  totemId?: string | null;
+  onPaymentInFlightChange?: (inFlight: boolean) => void;
   key?: string;
+}
+
+type DebitState = 'connecting' | 'waiting_card' | 'processing' | 'approved' | 'declined' | 'canceled' | 'error';
+
+// Requests to our own serverless functions get a bounded timeout so a hung
+// network/provider response surfaces as a recoverable error instead of an
+// infinite spinner.
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 15000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const getCategoryDetails = (icon: string) => {
@@ -112,12 +130,30 @@ const getCategoryDetails = (icon: string) => {
   }
 };
 
-export default function DonationView({ onBack, onGoHome, brand, lang, initialStep, initialCategory }: DonationViewProps) {
-  const [state, setState] = useState<DonationState>({
-    category: initialCategory || '',
-    value: 0,
-    customValue: '',
-    step: initialStep || 'category'
+export default function DonationView({ onBack, onGoHome, brand, lang, initialStep, initialCategory, totemId, onPaymentInFlightChange }: DonationViewProps) {
+  const [state, setState] = useState<DonationState>(() => {
+    // Resume an open payment attempt after a refresh — reuses the same
+    // mpPaymentId/QR/idempotency key instead of minting a second charge.
+    const open = getOpenAttempt(brand.id);
+    if (open) {
+      return {
+        category: open.category,
+        value: open.value,
+        customValue: '',
+        step: open.step,
+        paymentMethod: open.method,
+        mpPaymentId: open.mpPaymentId,
+        mpQrCode: open.mpQrCode,
+        mpQrCodeBase64: open.mpQrCodeBase64,
+        idempotencyKey: open.idempotencyKey,
+      };
+    }
+    return {
+      category: initialCategory || '',
+      value: 0,
+      customValue: '',
+      step: initialStep || 'category'
+    };
   });
 
   const [pixTimer, setPixTimer] = useState(300);
@@ -125,10 +161,58 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
   const [hoveredCategoryBg, setHoveredCategoryBg] = useState<string | null>(null);
   const [pixLoading, setPixLoading] = useState(false);
   const [pixError, setPixError] = useState('');
+  const [pixExpired, setPixExpired] = useState(false);
+  const [pixAttemptNonce, setPixAttemptNonce] = useState(0);
   const [checkingNow, setCheckingNow] = useState(false);
   const [cardError, setCardError] = useState('');
   const [cardProcessing, setCardProcessing] = useState(false);
+  const [cardAttemptNonce, setCardAttemptNonce] = useState(0);
   const [brickReady, setBrickReady] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [totemPendingMessage, setTotemPendingMessage] = useState(false);
+  const [successCountdown, setSuccessCountdown] = useState(20);
+  // Which methods this church has enabled — defaults to all three while
+  // loading so the Método step never flashes empty.
+  const [enabledMethods, setEnabledMethods] = useState<Array<'pix' | 'credit' | 'debit'>>(['pix', 'credit', 'debit']);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/enabled-methods?churchId=${encodeURIComponent(brand.id)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (!cancelled && Array.isArray(data?.methods)) setEnabledMethods(data.methods);
+      })
+      .catch(() => {
+        // Keep the all-methods default — never block the journey over this.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [brand.id]);
+
+  // Debit ("card" step) — honest simulated state machine, no real
+  // terminal/Mercado Pago Point integration yet.
+  const [debitState, setDebitState] = useState<DebitState>('connecting');
+  const [debitContributionId, setDebitContributionId] = useState<string | null>(null);
+  const [debitAttemptNonce, setDebitAttemptNonce] = useState(0);
+
+  // Tells App.tsx's InactivityTimer to suspend auto-reset while a payment is
+  // in flight — a shopper reading a QR/paying via their own phone often
+  // isn't touching the touchscreen, and shouldn't get bumped to Home for it.
+  useEffect(() => {
+    const inFlight = state.step === 'confirmation' || state.step === 'pix' || state.step === 'mp_card' || state.step === 'card';
+    onPaymentInFlightChange?.(inFlight);
+  }, [state.step]);
+
+  useEffect(() => {
+    return () => {
+      onPaymentInFlightChange?.(false);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (totemId) setTotemPendingMessage(false);
+  }, [totemId]);
 
   // Load the Mercado Pago SDK once, when the real credit-card step is reached.
   useEffect(() => {
@@ -185,15 +269,18 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
             return new Promise<void>((resolve, reject) => {
               setCardProcessing(true);
               setCardError('');
-              fetch('/api/create-payment', {
+              fetchWithTimeout('/api/create-payment', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   method: 'credit',
                   amount: state.value,
                   description: `${state.category} - ${brand.name}`,
+                  category: state.category,
                   brandId: brand.id,
                   card: cardFormData,
+                  idempotencyKey: state.idempotencyKey,
+                  totemId,
                 }),
               })
                 .then((res) => res.json())
@@ -215,7 +302,11 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
                 .catch((err) => {
                   console.error(err);
                   setCardProcessing(false);
-                  setCardError('Falha de conexão ao processar o pagamento.');
+                  setCardError(
+                    err?.name === 'AbortError'
+                      ? 'Tempo esgotado ao processar o pagamento. Tente novamente.'
+                      : 'Falha de conexão ao processar o pagamento.'
+                  );
                   reject();
                 });
             });
@@ -233,28 +324,35 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
       cancelled = true;
       brickController?.unmount?.();
     };
-  }, [state.step]);
+  }, [state.step, cardAttemptNonce]);
 
-  // Real PIX charge: create it with Mercado Pago as soon as this step opens.
+  // Real PIX charge: create it with Mercado Pago as soon as this step opens
+  // (or when "Tentar Novamente" bumps pixAttemptNonce after an error/expiry).
   useEffect(() => {
     if (state.step !== 'pix') return;
+    // A resumed attempt (post-refresh) already has a QR — don't mint a new one.
+    if (state.mpQrCode) return;
 
     let cancelled = false;
     setPixTimer(300);
     setPixError('');
+    setPixExpired(false);
     setPixLoading(true);
     speakText(`Gerando código PIX no valor de R$ ${state.value.toFixed(2)}.`);
 
     (async () => {
       try {
-        const res = await fetch('/api/create-payment', {
+        const res = await fetchWithTimeout('/api/create-payment', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             method: 'pix',
             amount: state.value,
             description: `${state.category} - ${brand.name}`,
+            category: state.category,
             brandId: brand.id,
+            idempotencyKey: state.idempotencyKey,
+            totemId,
           }),
         });
         const data = await res.json();
@@ -270,12 +368,17 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
           mpQrCode: data.qr_code,
           mpQrCodeBase64: data.qr_code_base64,
         }));
+        updateAttempt({ mpPaymentId: data.id, mpQrCode: data.qr_code, mpQrCodeBase64: data.qr_code_base64 });
         setPixLoading(false);
         speakText('Código PIX pronto. Aponte o celular ou copie a chave para pagar.');
-      } catch (e) {
+      } catch (e: any) {
         if (!cancelled) {
           console.error(e);
-          setPixError('Falha de conexão ao gerar o PIX.');
+          setPixError(
+            e?.name === 'AbortError'
+              ? 'Tempo esgotado ao gerar o PIX. Tente novamente.'
+              : 'Falha de conexão ao gerar o PIX.'
+          );
           setPixLoading(false);
         }
       }
@@ -284,16 +387,18 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
     return () => {
       cancelled = true;
     };
-  }, [state.step]);
+  }, [state.step, pixAttemptNonce]);
 
-  // Countdown display for the real PIX expiration window.
+  // Countdown display for the real PIX expiration window. Hits 0 -> expired
+  // state with explicit retry/cancel actions, instead of freezing forever.
   useEffect(() => {
-    if (state.step !== 'pix' || pixLoading) return;
+    if (state.step !== 'pix' || pixLoading || pixExpired) return;
 
     const timer = setInterval(() => {
       setPixTimer((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
+          setPixExpired(true);
           return 0;
         }
         return prev - 1;
@@ -301,15 +406,17 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [state.step, pixLoading]);
+  }, [state.step, pixLoading, pixExpired]);
 
-  // Poll Mercado Pago for real confirmation instead of a fake timer.
+  // Poll Mercado Pago for real confirmation instead of a fake timer. Stops
+  // once expired — the webhook (primary source of truth) and the manual
+  // recheck button remain available for a shopper who paid right at the wire.
   useEffect(() => {
-    if (state.step !== 'pix' || !state.mpPaymentId) return;
+    if (state.step !== 'pix' || !state.mpPaymentId || pixExpired) return;
 
     const poll = setInterval(async () => {
       try {
-        const res = await fetch(`/api/check-payment?id=${state.mpPaymentId}`);
+        const res = await fetch(`/api/check-payment?id=${state.mpPaymentId}&brandId=${encodeURIComponent(brand.id)}`);
         const data = await res.json();
         if (data.status === 'approved') {
           clearInterval(poll);
@@ -321,7 +428,49 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
     }, 4000);
 
     return () => clearInterval(poll);
-  }, [state.step, state.mpPaymentId]);
+  }, [state.step, state.mpPaymentId, pixExpired]);
+
+  const handleRetryPix = () => {
+    playTapSound();
+    // If there was already a charge (expired PIX, not a creation failure),
+    // void it at the provider instead of leaving it pending forever while a
+    // fresh one is minted.
+    if (state.mpPaymentId) {
+      void fetch('/api/cancel-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: state.mpPaymentId, brandId: brand.id }),
+      }).catch(() => {});
+    }
+    clearAttempt();
+    const attempt = startAttempt({ brandId: brand.id, category: state.category, value: state.value, method: 'pix', step: 'pix' });
+    setState((prev) => ({ ...prev, mpPaymentId: undefined, mpQrCode: undefined, mpQrCodeBase64: undefined, idempotencyKey: attempt.idempotencyKey }));
+    setPixExpired(false);
+    setPixError('');
+    setPixAttemptNonce((n) => n + 1);
+  };
+
+  const handleCancelPix = () => {
+    playTapSound();
+    // Fire-and-forget: void the charge at Mercado Pago and mark the ledger
+    // row canceled right away, instead of leaving it pending for ~5 min
+    // until it expires on its own. Never blocks the return to Home.
+    if (state.mpPaymentId) {
+      void fetch('/api/cancel-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: state.mpPaymentId, brandId: brand.id }),
+      }).catch(() => {});
+    }
+    clearAttempt();
+    onGoHome();
+  };
+
+  const handleRetryCard = () => {
+    playTapSound();
+    setCardError('');
+    setCardAttemptNonce((n) => n + 1);
+  };
 
   const handleCheckNow = async () => {
     if (!state.mpPaymentId) return;
@@ -342,18 +491,74 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
     }
   };
 
+  // Debit — no real terminal/Mercado Pago Point integration yet. Runs as an
+  // honest, clearly-labeled simulation with a real state machine (matching
+  // the spec's Conectando/Aguardando/Processando/Aprovado/Recusado/
+  // Cancelado/Erro), and still writes one ledger row per attempt via
+  // api/simulate-debit.js — the old fake 6s auto-approve wrote nothing.
   useEffect(() => {
     if (state.step !== 'card') return;
 
-    speakText(`Aguardando pagamento no cartão de débito no valor de R$ ${state.value.toFixed(2)}. Por favor, insira ou aproxime o seu cartão na maquininha.`);
+    let cancelled = false;
+    setDebitState('connecting');
+    setDebitContributionId(null);
 
-    // Debit still runs as a kiosk-terminal simulation.
-    const timer = setTimeout(() => {
+    (async () => {
+      try {
+        const res = await fetchWithTimeout('/api/simulate-debit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'start', category: state.category, amount: state.value, brandId: brand.id, totemId }),
+        });
+        const data = await res.json();
+        if (!cancelled && data?.id) setDebitContributionId(data.id);
+      } catch (e) {
+        console.error('Falha ao registrar tentativa de débito simulada:', e);
+      }
+      if (cancelled) return;
+      speakText(`Aguardando pagamento no cartão de débito no valor de R$ ${state.value.toFixed(2)}. Por favor, insira ou aproxime o seu cartão na maquininha.`);
+      const t = setTimeout(() => {
+        if (!cancelled) setDebitState('waiting_card');
+      }, 1200);
+      return () => clearTimeout(t);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [state.step, debitAttemptNonce]);
+
+  const resolveDebit = async (outcome: 'approved' | 'declined' | 'canceled' | 'error') => {
+    setDebitState(outcome === 'canceled' ? 'canceled' : 'processing');
+    if (debitContributionId) {
+      try {
+        await fetchWithTimeout('/api/simulate-debit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'resolve', id: debitContributionId, outcome }),
+        });
+      } catch (e) {
+        console.error('Falha ao resolver tentativa de débito simulada:', e);
+      }
+    }
+    if (outcome === 'approved') {
+      playSuccessSound();
       handleCompletePayment();
-    }, 6000);
+    } else {
+      setDebitState(outcome);
+    }
+  };
 
-    return () => clearTimeout(timer);
-  }, [state.step, state.value]);
+  const handleDebitCancel = () => {
+    playTapSound();
+    void resolveDebit('canceled');
+    onGoHome();
+  };
+
+  const handleDebitRetry = () => {
+    playTapSound();
+    setDebitAttemptNonce((n) => n + 1);
+  };
 
   const formatTimer = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -444,18 +649,78 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
     };
 
     void saveRegistration(newReg);
+    clearAttempt();
 
     playSuccessSound();
+    setSuccessCountdown(20);
     setState((prev) => ({ ...prev, step: 'success' }));
   };
+
+  const handleConfirmPayment = () => {
+    if (submitting) return;
+    if (!totemId) {
+      // create-payment/simulate-debit now require a bound totemId — don't
+      // navigate into a step that would just fail at the network call.
+      // App.tsx is already retrying resolution in the background; this
+      // message clears itself the next time the shopper taps Confirmar.
+      setTotemPendingMessage(true);
+      return;
+    }
+    playSuccessSound();
+    const method = state.paymentMethod;
+    const nextStep = method === 'pix' ? 'pix' : method === 'credit' ? 'mp_card' : 'card';
+
+    if (method === 'pix' || method === 'credit') {
+      setSubmitting(true);
+      const attempt = startAttempt({
+        brandId: brand.id,
+        category: state.category,
+        value: state.value,
+        method,
+        step: nextStep as 'pix' | 'mp_card',
+      });
+      setState((prev) => ({ ...prev, step: nextStep, idempotencyKey: attempt.idempotencyKey }));
+      // The guard only needs to cover the click itself — once the step
+      // actually changes, the per-step creation effects take over.
+      setTimeout(() => setSubmitting(false), 500);
+    } else {
+      setState((prev) => ({ ...prev, step: nextStep }));
+    }
+  };
+
+  // Auto-return to Home after a safe reading window, alongside the existing
+  // manual "Voltar ao Início" button (kept, unchanged).
+  useEffect(() => {
+    if (state.step !== 'success') return;
+    const timer = setInterval(() => {
+      setSuccessCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          onGoHome();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [state.step]);
 
   const handleGoBack = () => {
     playTapSound();
     if (state.step === 'value') setState(prev => ({ ...prev, step: 'category' }));
     else if (state.step === 'method') setState(prev => ({ ...prev, step: 'value' }));
-    else if (state.step === 'pix' || state.step === 'card' || state.step === 'mp_card') setState(prev => ({ ...prev, step: 'method' }));
+    else if (state.step === 'confirmation') setState(prev => ({ ...prev, step: 'method' }));
+    else if (state.step === 'pix' || state.step === 'card' || state.step === 'mp_card') setState(prev => ({ ...prev, step: 'confirmation' }));
     else onBack();
   };
+
+  const STEP_ORDER: DonationState['step'][] = ['category', 'value', 'method', 'confirmation', 'pix', 'success'];
+  const stepLabels = ['Operação', 'Valor', 'Pagamento', 'Confirmação', 'Cobrança', 'Concluído'];
+  const currentStepIndex = (() => {
+    if (state.step === 'card' || state.step === 'mp_card') return 4; // agrupa com "pix" (índice da etapa "Cobrança")
+    const idx = STEP_ORDER.indexOf(state.step);
+    return idx === -1 ? 0 : idx;
+  })();
 
   return (
     <div className={`relative bg-brand-light text-[#191c1e] flex flex-col overflow-x-hidden font-sans submodule-view ${
@@ -491,11 +756,44 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
         </div>
       </header>
 
+      {/* Progress indicator — hidden on the fullscreen category grid */}
+      {state.step !== 'category' && (
+        <div className="fixed top-[64px] sm:top-[76px] md:top-[84px] left-0 w-full z-40 bg-white/80 backdrop-blur-md border-b border-slate-200 px-4 sm:px-6 md:px-10 py-2.5 flex items-center justify-center gap-1.5 sm:gap-2.5">
+          {stepLabels.map((label, idx) => (
+            <React.Fragment key={label}>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span
+                  className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black transition-colors ${
+                    idx < currentStepIndex
+                      ? 'bg-emerald-500 text-white'
+                      : idx === currentStepIndex
+                      ? 'bg-brand-red text-white'
+                      : 'bg-slate-200 text-slate-500'
+                  }`}
+                >
+                  {idx < currentStepIndex ? '✓' : idx + 1}
+                </span>
+                <span
+                  className={`text-[10px] sm:text-xs font-black uppercase tracking-wider hidden sm:inline ${
+                    idx === currentStepIndex ? 'text-brand-red' : idx < currentStepIndex ? 'text-emerald-600' : 'text-slate-400'
+                  }`}
+                >
+                  {label}
+                </span>
+              </div>
+              {idx < stepLabels.length - 1 && (
+                <div className={`w-4 sm:w-8 h-0.5 rounded-full shrink-0 ${idx < currentStepIndex ? 'bg-emerald-400' : 'bg-slate-200'}`} />
+              )}
+            </React.Fragment>
+          ))}
+        </div>
+      )}
+
       {/* Main interactive area */}
       <main className={`flex-grow relative z-10 w-full flex flex-col ${
         state.step === 'category'
           ? 'pt-[5.5rem] md:pt-[6rem] pb-24 px-1 min-h-0'
-          : 'pt-28 pb-32 px-6 md:px-20 max-w-[1550px] mx-auto justify-center'
+          : 'pt-36 md:pt-40 pb-32 px-6 md:px-20 max-w-[1550px] mx-auto justify-center'
       }`}>
         
         {/* STEP 1: CATEGORY SELECTION */}
@@ -627,11 +925,12 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4">
               {/* PIX Method */}
+              {enabledMethods.includes('pix') && (
               <button
                 type="button"
                 onClick={() => {
                   playSuccessSound();
-                  setState(prev => ({ ...prev, step: 'pix', paymentMethod: 'pix' }));
+                  setState(prev => ({ ...prev, step: 'confirmation', paymentMethod: 'pix' }));
                 }}
                 className="relative overflow-hidden bg-white/95 hover:bg-white rounded-2xl p-8 border-2 border-slate-200 hover:border-brand-red cursor-pointer transition-all flex flex-col items-center text-center justify-between shadow-sm group hover:scale-[1.05] active:scale-[0.96] transition-all duration-300 min-h-[300px]"
               >
@@ -652,13 +951,15 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
                   Selecionar PIX →
                 </div>
               </button>
+              )}
 
               {/* Credit Card Method (real Mercado Pago charge) */}
+              {enabledMethods.includes('credit') && (
               <button
                 type="button"
                 onClick={() => {
                   playSuccessSound();
-                  setState(prev => ({ ...prev, step: 'mp_card', paymentMethod: 'credit' }));
+                  setState(prev => ({ ...prev, step: 'confirmation', paymentMethod: 'credit' }));
                 }}
                 className="relative overflow-hidden bg-white/95 hover:bg-white rounded-2xl p-8 border-2 border-slate-200 hover:border-brand-red cursor-pointer transition-all flex flex-col items-center text-center justify-between shadow-sm group hover:scale-[1.05] active:scale-[0.96] transition-all duration-300 min-h-[300px]"
               >
@@ -679,13 +980,15 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
                   Pagar no Crédito →
                 </div>
               </button>
+              )}
 
               {/* Debit Card Method */}
+              {enabledMethods.includes('debit') && (
               <button
                 type="button"
                 onClick={() => {
                   playSuccessSound();
-                  setState(prev => ({ ...prev, step: 'card', paymentMethod: 'debit' }));
+                  setState(prev => ({ ...prev, step: 'confirmation', paymentMethod: 'debit' }));
                 }}
                 className="relative overflow-hidden bg-white/95 hover:bg-white rounded-2xl p-8 border-2 border-slate-200 hover:border-brand-red cursor-pointer transition-all flex flex-col items-center text-center justify-between shadow-sm group hover:scale-[1.05] active:scale-[0.96] transition-all duration-300 min-h-[300px] md:col-span-2"
               >
@@ -706,7 +1009,67 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
                   Pagar no Débito →
                 </div>
               </button>
+              )}
+
+              {enabledMethods.length === 0 && (
+                <div className="md:col-span-2 text-center py-12 border-2 border-dashed border-slate-300 rounded-2xl text-slate-500 font-semibold text-sm">
+                  Nenhuma forma de pagamento disponível no momento. Procure um responsável.
+                </div>
+              )}
             </div>
+          </div>
+        )}
+
+        {/* STEP 2.6: CONFIRMATION */}
+        {state.step === 'confirmation' && (
+          <div className="space-y-6 animate-fade-in text-center max-w-lg mx-auto">
+            <header className="max-w-xl mx-auto">
+              <span className="bg-brand-red/10 text-brand-red text-sm font-black tracking-widest px-3 py-1.5 rounded-full uppercase border border-brand-red/20">
+                Revise antes de continuar
+              </span>
+              <h2 className="text-3xl font-black text-brand-dark mt-3">Confirmar Contribuição</h2>
+            </header>
+
+            <div className="relative overflow-hidden bg-white/95 rounded-3xl p-8 border-2 border-slate-200 shadow-lg text-left space-y-5">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                <span className="text-xs font-black uppercase tracking-wider text-slate-450">Categoria</span>
+                <span className="text-lg font-extrabold text-brand-dark">{state.category}</span>
+              </div>
+              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                <span className="text-xs font-black uppercase tracking-wider text-slate-450">Valor</span>
+                <span className="text-2xl font-black text-brand-red">R$ {state.value.toFixed(2)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black uppercase tracking-wider text-slate-450">Forma de Pagamento</span>
+                <span className="text-lg font-extrabold text-brand-dark flex items-center gap-2">
+                  <span className="material-symbols-outlined !text-xl">
+                    {state.paymentMethod === 'pix' ? 'qr_code_2' : state.paymentMethod === 'credit' ? 'credit_card' : 'contactless'}
+                  </span>
+                  {state.paymentMethod === 'pix' ? 'PIX' : state.paymentMethod === 'credit' ? 'Crédito' : 'Débito'}
+                </span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleConfirmPayment}
+              disabled={submitting}
+              className="w-full h-16 text-white font-black rounded-2xl flex items-center justify-center gap-3 cursor-pointer shadow-md active:scale-[0.98] transition-transform text-lg disabled:opacity-60 disabled:cursor-not-allowed"
+              style={{
+                background: `linear-gradient(135deg, ${brand.primaryColor} 0%, ${brand.primaryColorHover} 100%)`,
+                boxShadow: `0 10px 25px ${brand.primaryColor}55`
+              }}
+            >
+              <span className={`material-symbols-outlined !text-2xl ${submitting ? 'animate-spin' : ''}`}>
+                {submitting ? 'progress_activity' : 'check_circle'}
+              </span>
+              <span>{submitting ? 'Confirmando...' : 'Confirmar e Continuar'}</span>
+            </button>
+            {totemPendingMessage && (
+              <p className="text-xs font-bold text-amber-600 text-center">
+                Identificando o totem, aguarde um instante e toque em Confirmar novamente.
+              </p>
+            )}
           </div>
         )}
 
@@ -736,13 +1099,21 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
                 )}
 
                 {!pixLoading && pixError && (
-                  <div className="w-80 h-80 md:w-96 md:h-96 flex flex-col items-center justify-center gap-3 text-red-500 text-center px-4">
+                  <div className="w-80 h-80 md:w-96 md:h-96 flex flex-col items-center justify-center gap-4 text-red-500 text-center px-4">
                     <span className="material-symbols-outlined !text-5xl">error</span>
                     <span className="text-xs font-bold">{pixError}</span>
                   </div>
                 )}
 
-                {!pixLoading && !pixError && state.mpQrCodeBase64 && (
+                {!pixLoading && !pixError && pixExpired && (
+                  <div className="w-80 h-80 md:w-96 md:h-96 flex flex-col items-center justify-center gap-4 text-slate-500 text-center px-4">
+                    <span className="material-symbols-outlined !text-5xl text-amber-500">schedule</span>
+                    <span className="text-sm font-black text-slate-700">O código PIX expirou</span>
+                    <span className="text-xs font-semibold">Gere um novo código para continuar.</span>
+                  </div>
+                )}
+
+                {!pixLoading && !pixError && !pixExpired && state.mpQrCodeBase64 && (
                   <div className="relative w-80 h-80 md:w-96 md:h-96 group border-2 border-brand-red/20 rounded-2xl overflow-hidden p-1 shadow-inner bg-slate-50">
                     <img
                       className="w-full h-full object-contain rounded-xl pointer-events-none opacity-90"
@@ -755,7 +1126,7 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
                 )}
 
                 {/* Countdown timer display */}
-                {!pixLoading && !pixError && (
+                {!pixLoading && !pixError && !pixExpired && (
                   <div className="mt-4 flex items-center justify-center gap-2 text-slate-700 bg-slate-100 border border-slate-200 px-4 py-2 rounded-xl">
                     <span className="material-symbols-outlined text-brand-red !text-lg animate-spin">autorenew</span>
                     <span className="text-xs font-black uppercase tracking-wider">O código expira em:</span>
@@ -764,7 +1135,7 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
                 )}
 
                 {/* Copy paste button */}
-                {!pixLoading && !pixError && state.mpQrCode && (
+                {!pixLoading && !pixError && !pixExpired && state.mpQrCode && (
                   <div className="mt-4 w-full">
                     <button
                       type="button"
@@ -777,13 +1148,37 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
                   </div>
                 )}
 
-                <p className="text-xs text-slate-500 font-semibold mt-4 leading-relaxed">
-                  Abra o aplicativo do seu banco, selecione a opção "Pagar com PIX/QR Code" e aponte para o código acima para concluir. A confirmação é automática.
-                </p>
+                {!pixExpired && !pixError && (
+                  <p className="text-xs text-slate-500 font-semibold mt-4 leading-relaxed">
+                    Abra o aplicativo do seu banco, selecione a opção "Pagar com PIX/QR Code" e aponte para o código acima para concluir. A confirmação é automática.
+                  </p>
+                )}
+
+                {/* Retry/cancel — shown on error or expiry, so the user is never stuck */}
+                {(pixError || pixExpired) && !pixLoading && (
+                  <div className="mt-2 w-full grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={handleRetryPix}
+                      className="h-14 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-transform text-sm uppercase tracking-wider"
+                    >
+                      <span className="material-symbols-outlined !text-lg">refresh</span>
+                      <span>Tentar Novamente</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelPix}
+                      className="h-14 bg-slate-200 hover:bg-slate-300 text-slate-700 font-black rounded-xl flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-transform text-sm uppercase tracking-wider"
+                    >
+                      <span className="material-symbols-outlined !text-lg">close</span>
+                      <span>Cancelar</span>
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 
-            {!pixLoading && !pixError && (
+            {!pixLoading && !pixError && !pixExpired && (
               <button
                 type="button"
                 onClick={handleCheckNow}
@@ -799,12 +1194,12 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
           </div>
         )}
 
-        {/* STEP 3.5: CARD PAYMENT INTERACTION */}
+        {/* STEP 3.5: DEBIT — honest simulation (no real terminal/MP Point yet) */}
         {state.step === 'card' && (
           <div className="space-y-6 animate-fade-in text-center max-w-3xl mx-auto">
             <header className="space-y-2">
               <span className="text-xs uppercase tracking-widest font-black text-slate-500 block">
-                Pagamento em Cartão de {state.paymentMethod === 'credit' ? 'Crédito' : 'Débito'}
+                Pagamento em Cartão de Débito
               </span>
               <h2 className="text-2xl font-black text-brand-dark">Aproxime ou Insira o Cartão</h2>
               <div className="text-xl font-extrabold text-brand-red bg-brand-red/10 rounded-full px-6 py-2.5 inline-block border border-brand-red/30 shadow-sm">
@@ -812,18 +1207,22 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
               </div>
             </header>
 
+            {/* Persistent, unmissable notice — this never charges a real card */}
+            <div className="bg-amber-100 border-2 border-amber-300 text-amber-800 rounded-xl px-4 py-2.5 text-xs font-black uppercase tracking-wider inline-flex items-center gap-2 mx-auto">
+              <span className="material-symbols-outlined !text-lg">science</span>
+              <span>Simulação — sem integração real de maquininha</span>
+            </div>
+
             {/* Card Machine visual */}
             <div className="relative overflow-hidden bg-white/90 backdrop-blur-md rounded-3xl p-8 border-2 border-slate-200 shadow-lg flex flex-col items-center space-y-6">
-              <div 
+              <div
                 className="absolute inset-0 z-0 bg-cover bg-center bg-no-repeat opacity-[0.12] pointer-events-none"
                 style={{ backgroundImage: `url(${brand.bgUrl})`, filter: 'blur(2px)' }}
               />
               <div className="relative z-10 flex flex-col items-center w-full space-y-6">
                 <div className="relative w-48 h-48 flex items-center justify-center">
-                  {/* Simulated payment machine or terminal icon */}
                   <div className="absolute inset-0 bg-brand-red/5 rounded-full animate-ping opacity-30 animate-duration-3000" />
                   <div className="relative w-36 h-36 bg-slate-800 text-white rounded-2xl p-4 shadow-xl border border-slate-700 flex flex-col justify-between">
-                    {/* Terminal Screen */}
                     <div className="bg-emerald-950 text-emerald-400 font-mono text-[10px] p-2 rounded border border-emerald-900 text-left space-y-1 shadow-inner min-h-[50px]">
                       <div className="flex justify-between">
                         <span>VALOR:</span>
@@ -831,10 +1230,9 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
                       </div>
                       <div className="animate-pulse flex items-center gap-1 mt-1 text-[9px] text-emerald-300">
                         <span className="material-symbols-outlined !text-[10px]">contactless</span>
-                        <span>APROXIME OU INSIRA</span>
+                        <span>{debitState === 'connecting' ? 'CONECTANDO...' : debitState === 'processing' ? 'PROCESSANDO...' : 'APROXIME OU INSIRA'}</span>
                       </div>
                     </div>
-                    {/* Keyboard Area */}
                     <div className="grid grid-cols-3 gap-1 pt-2">
                       {[1,2,3,4,5,6,7,8,9].map(n => (
                         <div key={n} className="w-full h-1.5 bg-slate-700 rounded-[2px]" />
@@ -844,33 +1242,105 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
                       <div className="h-1.5 bg-emerald-600 rounded-[2px]" />
                     </div>
                   </div>
-
-                  {/* Hand contactless animation */}
                   <div className="absolute -bottom-2 -right-2 bg-brand-red text-white p-3 rounded-full shadow-lg border-2 border-white animate-bounce">
                     <span className="material-symbols-outlined !text-2xl">contactless</span>
                   </div>
                 </div>
 
-                {/* Waiting status */}
-                <div className="flex items-center justify-center gap-2 text-slate-700 bg-slate-100 border border-slate-200 px-5 py-3 rounded-2xl w-full">
-                  <span className="material-symbols-outlined text-brand-red !text-xl animate-pulse">sync_saved_locally</span>
-                  <span className="text-xs font-black uppercase tracking-wider">Aguardando maquininha...</span>
-                </div>
+                {/* Status by debit state */}
+                {debitState === 'connecting' && (
+                  <div className="flex items-center justify-center gap-2 text-slate-700 bg-slate-100 border border-slate-200 px-5 py-3 rounded-2xl w-full">
+                    <span className="material-symbols-outlined text-brand-red !text-xl animate-spin">progress_activity</span>
+                    <span className="text-xs font-black uppercase tracking-wider">Conectando ao terminal...</span>
+                  </div>
+                )}
+                {debitState === 'waiting_card' && (
+                  <div className="flex items-center justify-center gap-2 text-slate-700 bg-slate-100 border border-slate-200 px-5 py-3 rounded-2xl w-full">
+                    <span className="material-symbols-outlined text-brand-red !text-xl animate-pulse">sync_saved_locally</span>
+                    <span className="text-xs font-black uppercase tracking-wider">Aguardando cartão...</span>
+                  </div>
+                )}
+                {debitState === 'processing' && (
+                  <div className="flex items-center justify-center gap-2 text-slate-700 bg-slate-100 border border-slate-200 px-5 py-3 rounded-2xl w-full">
+                    <span className="material-symbols-outlined text-brand-red !text-xl animate-spin">progress_activity</span>
+                    <span className="text-xs font-black uppercase tracking-wider">Processando...</span>
+                  </div>
+                )}
+                {(debitState === 'declined' || debitState === 'error' || debitState === 'canceled') && (
+                  <div className="flex items-center justify-center gap-2 text-red-600 bg-red-50 border border-red-200 px-5 py-3 rounded-2xl w-full">
+                    <span className="material-symbols-outlined !text-xl">error</span>
+                    <span className="text-xs font-black uppercase tracking-wider">
+                      {debitState === 'declined' ? 'Recusado' : debitState === 'error' ? 'Erro no terminal' : 'Cancelado'}
+                    </span>
+                  </div>
+                )}
 
                 <p className="text-xs text-slate-500 font-semibold leading-relaxed">
-                  Utilize o leitor de cartões integrado na lateral do totem. Caso o pagamento não seja processado automaticamente, você pode simular a aprovação abaixo.
+                  Utilize o leitor de cartões integrado na lateral do totem. Como não há maquininha real conectada nesta versão, use os controles abaixo (uso da equipe) para simular o resultado.
                 </p>
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={handleCompletePayment}
-              className="w-full h-16 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-2xl flex items-center justify-center gap-3 cursor-pointer shadow-md active:scale-[0.98] transition-transform text-lg"
-            >
-              <span className="material-symbols-outlined !text-2xl">check_circle</span>
-              <span>Simular Cartão Aprovado</span>
-            </button>
+            {debitState === 'waiting_card' && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <button
+                  type="button"
+                  onClick={() => resolveDebit('approved')}
+                  className="h-16 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-2xl flex items-center justify-center gap-2 cursor-pointer shadow-md active:scale-[0.98] transition-transform text-sm uppercase tracking-wider"
+                >
+                  <span className="material-symbols-outlined !text-xl">check_circle</span>
+                  <span>Simular Aprovado</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => resolveDebit('declined')}
+                  className="h-16 bg-amber-500 hover:bg-amber-600 text-white font-black rounded-2xl flex items-center justify-center gap-2 cursor-pointer shadow-md active:scale-[0.98] transition-transform text-sm uppercase tracking-wider"
+                >
+                  <span className="material-symbols-outlined !text-xl">cancel</span>
+                  <span>Simular Recusado</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => resolveDebit('error')}
+                  className="h-16 bg-slate-500 hover:bg-slate-600 text-white font-black rounded-2xl flex items-center justify-center gap-2 cursor-pointer shadow-md active:scale-[0.98] transition-transform text-sm uppercase tracking-wider"
+                >
+                  <span className="material-symbols-outlined !text-xl">error</span>
+                  <span>Simular Erro</span>
+                </button>
+              </div>
+            )}
+
+            {(debitState === 'declined' || debitState === 'error') && (
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={handleDebitRetry}
+                  className="h-14 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-transform text-sm uppercase tracking-wider"
+                >
+                  <span className="material-symbols-outlined !text-lg">refresh</span>
+                  <span>Tentar Novamente</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDebitCancel}
+                  className="h-14 bg-slate-200 hover:bg-slate-300 text-slate-700 font-black rounded-xl flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-transform text-sm uppercase tracking-wider"
+                >
+                  <span className="material-symbols-outlined !text-lg">close</span>
+                  <span>Cancelar</span>
+                </button>
+              </div>
+            )}
+
+            {(debitState === 'connecting' || debitState === 'waiting_card') && (
+              <button
+                type="button"
+                onClick={handleDebitCancel}
+                className="w-full h-14 bg-slate-200 hover:bg-slate-300 text-slate-700 font-black rounded-xl flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-transform text-sm uppercase tracking-wider"
+              >
+                <span className="material-symbols-outlined !text-lg">close</span>
+                <span>Cancelar</span>
+              </button>
+            )}
           </div>
         )}
 
@@ -887,9 +1357,29 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
 
             <div className="relative overflow-hidden bg-white rounded-3xl p-4 md:p-6 border-2 border-slate-200 shadow-lg text-left">
               {cardError && (
-                <div className="mb-4 flex items-center gap-2 text-red-600 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm font-bold">
-                  <span className="material-symbols-outlined !text-xl">error</span>
-                  <span>{cardError}</span>
+                <div className="mb-4 space-y-3">
+                  <div className="flex items-center gap-2 text-red-600 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm font-bold">
+                    <span className="material-symbols-outlined !text-xl">error</span>
+                    <span>{cardError}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={handleRetryCard}
+                      className="h-12 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-transform text-xs uppercase tracking-wider"
+                    >
+                      <span className="material-symbols-outlined !text-base">refresh</span>
+                      <span>Tentar Novamente</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { playTapSound(); clearAttempt(); onGoHome(); }}
+                      className="h-12 bg-slate-200 hover:bg-slate-300 text-slate-700 font-black rounded-xl flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition-transform text-xs uppercase tracking-wider"
+                    >
+                      <span className="material-symbols-outlined !text-base">close</span>
+                      <span>Cancelar</span>
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -942,6 +1432,35 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
                 </p>
               </div>
 
+              {/* Comprovante */}
+              <div className="w-full bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl p-5 text-left space-y-2.5">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 text-center mb-1">Comprovante</p>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-slate-500 font-bold">Categoria</span>
+                  <span className="text-slate-800 font-extrabold">{state.category}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-slate-500 font-bold">Valor</span>
+                  <span className="text-brand-red font-black">R$ {state.value.toFixed(2)}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-slate-500 font-bold">Forma de Pagamento</span>
+                  <span className="text-slate-800 font-extrabold">
+                    {state.paymentMethod === 'pix' ? 'PIX' : state.paymentMethod === 'credit' ? 'Crédito' : 'Débito'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-slate-500 font-bold">Data e Hora</span>
+                  <span className="text-slate-800 font-extrabold">{new Date().toLocaleString('pt-BR')}</span>
+                </div>
+                {state.mpPaymentId && (
+                  <div className="flex items-center justify-between text-sm pt-2 border-t border-slate-200">
+                    <span className="text-slate-500 font-bold">Código da Transação</span>
+                    <span className="text-slate-600 font-mono text-xs">{state.mpPaymentId}</span>
+                  </div>
+                )}
+              </div>
+
               {/* Snippet graphic style card */}
               {brand.id === 'imocarwash' ? (
                 <div className="bg-white/80 rounded-2xl p-6 border border-slate-200 italic text-slate-500 shadow-sm w-full text-center">
@@ -976,6 +1495,10 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
               >
                 Voltar ao Início
               </button>
+
+              <p className="text-[10px] uppercase tracking-widest font-bold text-slate-400">
+                Voltando ao início em {successCountdown}s
+              </p>
             </div>
           </div>
         )}

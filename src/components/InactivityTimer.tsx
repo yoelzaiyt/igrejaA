@@ -7,9 +7,14 @@ interface InactivityTimerProps {
   onReset: () => void;
   brand: BrandConfig;
   children: React.ReactNode;
+  // While true, the auto-reset is fully suspended — used while a payment is
+  // in flight (e.g. waiting on a PIX QR the shopper is paying via their own
+  // phone) so the totem never kicks them back to Home mid-payment just
+  // because they aren't touching the touchscreen.
+  suspended?: boolean;
 }
 
-export default function InactivityTimer({ currentView, onReset, brand, children }: InactivityTimerProps) {
+export default function InactivityTimer({ currentView, onReset, brand, children, suspended }: InactivityTimerProps) {
   const [showWarning, setShowWarning] = useState(false);
   const [countdown, setCountdown] = useState(15);
   
@@ -31,8 +36,8 @@ export default function InactivityTimer({ currentView, onReset, brand, children 
     if (timerRef.current) clearTimeout(timerRef.current);
     if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
 
-    // Only set timer if we are not on the home page
-    if (currentView !== 'home') {
+    // Only set timer if we are not on the home page, and not mid-payment
+    if (currentView !== 'home' && !suspended) {
       timerRef.current = setTimeout(() => {
         startWarning();
       }, INACTIVITY_LIMIT);
@@ -88,6 +93,13 @@ export default function InactivityTimer({ currentView, onReset, brand, children 
     // Initialize timer
     resetTimer();
 
+    // A payment going in-flight mid-warning should cancel the warning too —
+    // the shopper may have just switched to their banking app, not walked away.
+    if (suspended && showWarning) {
+      setShowWarning(false);
+      setCountdown(WARNING_LIMIT);
+    }
+
     // Cleanup
     return () => {
       events.forEach(event => {
@@ -96,7 +108,7 @@ export default function InactivityTimer({ currentView, onReset, brand, children 
       if (timerRef.current) clearTimeout(timerRef.current);
       if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
     };
-  }, [currentView, showWarning]);
+  }, [currentView, showWarning, suspended]);
 
   return (
     <>

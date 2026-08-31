@@ -26,11 +26,12 @@ export interface DonationState {
   category: string;
   value: number;
   customValue: string;
-  step: 'category' | 'value' | 'method' | 'pix' | 'card' | 'mp_card' | 'success';
+  step: 'category' | 'value' | 'method' | 'confirmation' | 'pix' | 'card' | 'mp_card' | 'success';
   paymentMethod?: 'pix' | 'credit' | 'debit';
   mpPaymentId?: string | number;
   mpQrCode?: string;
   mpQrCodeBase64?: string;
+  idempotencyKey?: string;
 }
 
 export interface NewMemberState {
