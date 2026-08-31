@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { DonationState } from '../types';
 import { playTapSound, playSuccessSound } from '../utils/audio';
 import NumericKeypad from './NumericKeypad';
@@ -163,6 +163,7 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
   const [pixError, setPixError] = useState('');
   const [pixExpired, setPixExpired] = useState(false);
   const [pixAttemptNonce, setPixAttemptNonce] = useState(0);
+  const firedPixKeyRef = useRef<string | null>(null);
   const [checkingNow, setCheckingNow] = useState(false);
   const [cardError, setCardError] = useState('');
   const [cardProcessing, setCardProcessing] = useState(false);
@@ -332,6 +333,17 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
     if (state.step !== 'pix') return;
     // A resumed attempt (post-refresh) already has a QR — don't mint a new one.
     if (state.mpQrCode) return;
+    // React StrictMode (dev only) mounts, cleans up, and remounts this
+    // effect for the SAME idempotencyKey — the `cancelled` flag below stops
+    // the stale response from being applied, but the real fetch still goes
+    // out twice. Mercado Pago's own duplicate-request guard (independent of
+    // our idempotencyKey) then rejects the second one with a 423 — and
+    // since network timing decides which response "wins", that error can
+    // end up on the request StrictMode actually kept, so no QR ever shows
+    // even though the charge succeeded. Skip re-firing for an idempotencyKey
+    // this component instance already fired a request for.
+    if (firedPixKeyRef.current === state.idempotencyKey) return;
+    firedPixKeyRef.current = state.idempotencyKey ?? null;
 
     let cancelled = false;
     setPixTimer(300);
@@ -973,7 +985,7 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
                 <div className="relative z-10 flex-grow">
                   <h3 className="font-extrabold text-2xl text-brand-dark mb-2 group-hover:text-brand-red transition-colors">Crédito</h3>
                   <p className="text-sm text-slate-500 font-semibold leading-relaxed">
-                    Pague com seu cartão de crédito aproximando ou inserindo na maquininha.
+                    Pague com seu cartão de crédito digitando os dados na tela, com segurança.
                   </p>
                 </div>
                 <div className="relative z-10 mt-6 font-black text-sm uppercase text-slate-450 group-hover:text-brand-red tracking-wider shrink-0">

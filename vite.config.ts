@@ -52,6 +52,13 @@ export default defineConfig(() => {
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      // `vite dev` doesn't serve api/*.js (those are Vercel serverless
+      // functions) — forward to `vercel dev` running separately so the
+      // totem/payment flows work locally too. Start it with:
+      //   npx vercel dev --listen 3001
+      proxy: {
+        '/api': 'http://localhost:3001',
+      },
     },
   };
 });

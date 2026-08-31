@@ -69,9 +69,17 @@ export default async function handler(req, res) {
   }
 
   const forwardedHost = req.headers['x-forwarded-host'] || req.headers.host;
+  // Mercado Pago validates notification_url server-side and rejects anything
+  // that isn't a real public HTTPS host — a local host (vercel dev, vite
+  // proxy) makes the whole payment creation fail with "notificaction_url
+  // attribute must be url valid". Omitting it is safe: the webhook is only
+  // ever a fast-path (see mercadopago-webhook.js's own header comment) —
+  // the client poll ("Já Paguei, Verificar Agora") and check-payment.js
+  // remain the source of truth either way.
+  const isLocalHost = forwardedHost && /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(forwardedHost);
   const notificationUrl = process.env.PUBLIC_BASE_URL
     ? `${process.env.PUBLIC_BASE_URL}/api/mercadopago-webhook`
-    : forwardedHost
+    : forwardedHost && !isLocalHost
     ? `https://${forwardedHost}/api/mercadopago-webhook`
     : undefined;
 
