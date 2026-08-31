@@ -17,17 +17,33 @@ const PARTICLES = Array.from({ length: 18 }, (_, i) => ({
   opacity:  `${0.15 + (i % 5) * 0.08}`,
 }));
 
+/* Imagem temática de fundo por módulo — mesma técnica visual da tela de Dízimo/Oferta */
+const MODULE_BG = {
+  newMember: 'https://images.unsplash.com/photo-1511632765486-a01980e01a18?w=1200&fit=crop&q=80',
+  donations: 'https://images.unsplash.com/photo-1554415707-6e8cfc93fe23?w=1200&fit=crop&q=80',
+  ministries: 'https://images.unsplash.com/photo-1559027615-cd264cde14b8?w=1200&fit=crop&q=80',
+  checkin: 'https://images.unsplash.com/photo-1523580494863-6f3031224c94?w=1200&fit=crop&q=80',
+  myCell: 'https://images.unsplash.com/photo-1543269865-cbf427effbad?w=1200&fit=crop&q=80',
+  prayer: 'https://images.unsplash.com/photo-1438232992991-995b7058bbb3?w=1200&fit=crop&q=80',
+} as const;
+
+const ModuleBgImage = ({ url }: { url: string }) => (
+  <div
+    className="absolute inset-0 z-0 bg-cover bg-center bg-no-repeat opacity-[0.12] group-hover:opacity-[0.28] transition-opacity duration-500 pointer-events-none"
+    style={{ backgroundImage: `url(${url})`, filter: 'blur(1px)' }}
+  />
+);
+
 interface DashboardViewProps {
   onSelectView: (view: ViewState, options?: { step?: 'category' | 'value'; category?: string }) => void;
   onGoHome: () => void;
   onOpenAccessibility: () => void;
-  onOpenAdmin?: () => void;
   brand: BrandConfig;
   lang: Lang;
   onLanguageChange: (lang: Lang) => void;
 }
 
-export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibility, onOpenAdmin, brand, lang, onLanguageChange }: DashboardViewProps) {
+export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibility, brand, lang, onLanguageChange }: DashboardViewProps) {
   const [showPromo, setShowPromo] = useState(false);
   const [showYmcaQrModal, setShowYmcaQrModal] = useState(false);
 
@@ -41,20 +57,12 @@ export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibil
     onGoHome();
   };
 
-  const handleHelpClick = () => {
-    playTapSound();
-    speakText(`Ajuda solicitada. Se precisar de auxílio com o totem da ${brand.name}, chame um de nossos voluntários no saguão.`);
-    alert(`Este é um totem de atendimento inteligente. Se precisar de ajuda física, chame um de nossos voluntários no saguão principal.`);
-  };
-
   const handleAccessibilityClick = () => {
     playTapSound();
     onOpenAccessibility();
   };
 
   const accent = '#F5C31E'; // Institutional generic yellow
-  const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-  const isAdminMode = params ? params.get('admin') === 'true' : false;
 
   const getFooterFontSizeClass = (text: string) => {
     if (text.length > 20) {
@@ -95,11 +103,11 @@ export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibil
       />
 
       {/* Background Image with Dark Glassmorphism Overlay */}
-      <div 
-        className="absolute inset-0 z-0 bg-cover bg-center bg-no-repeat transition-opacity duration-1000 opacity-60"
-        style={{ backgroundImage: `url(${brand.dashboardBgUrl || brand.bgUrl})`, filter: 'blur(8px)' }}
+      <div
+        className="absolute inset-0 z-0 bg-cover bg-center bg-no-repeat transition-opacity duration-1000 opacity-90"
+        style={{ backgroundImage: `url(${brand.dashboardBgUrl || brand.bgUrl})`, filter: 'blur(2px)' }}
       />
-      <div className="absolute inset-0 z-0 bg-gradient-to-b from-[#020617]/60 via-[#020617]/50 to-[#020617]/80 backdrop-blur-xl" />
+      <div className="absolute inset-0 z-0 bg-gradient-to-b from-[#020617]/70 via-[#020617]/35 to-[#020617]/75" />
 
       {/* Particle background system (subtle) */}
       <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none opacity-40 mix-blend-screen">
@@ -150,6 +158,15 @@ export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibil
             <span className="material-symbols-outlined !text-base">language</span>
             <span>{lang}</span>
           </button>
+          <button
+            type="button"
+            onClick={handleAccessibilityClick}
+            className="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 flex items-center justify-center cursor-pointer backdrop-blur-xl text-white transition-all active:scale-95"
+            aria-label="Abrir opções de acessibilidade"
+            title="Acessibilidade"
+          >
+            <span className="material-symbols-outlined !text-lg">accessibility_new</span>
+          </button>
         </div>
       </nav>
 
@@ -172,6 +189,7 @@ export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibil
             onClick={() => handleSelect('new_member')}
             className={`${menuCardClass} hover:border-indigo-400/60 hover:bg-indigo-900/40`}
           >
+            <ModuleBgImage url={MODULE_BG.newMember} />
             <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
             <span className={`${menuCardIconClass} text-indigo-300 group-hover:text-indigo-200`}>
               person_add
@@ -190,6 +208,7 @@ export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibil
             onClick={() => handleSelect('donations')}
             className={`${menuCardClass} hover:border-amber-400/60 hover:bg-amber-900/40`}
           >
+            <ModuleBgImage url={MODULE_BG.donations} />
             <div className="absolute inset-0 bg-gradient-to-bl from-amber-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
             <span className={`${menuCardIconClass} text-amber-300 group-hover:text-amber-200`}>
               payments
@@ -208,6 +227,7 @@ export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibil
             onClick={() => handleSelect('ministries')}
             className={`${menuCardClass} hover:border-cyan-400/60 hover:bg-cyan-900/40`}
           >
+            <ModuleBgImage url={MODULE_BG.ministries} />
             <div className="absolute inset-0 bg-gradient-to-tr from-cyan-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
             <span className={`${menuCardIconClass} text-cyan-300 group-hover:text-cyan-200`}>
               groups
@@ -251,6 +271,7 @@ export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibil
               onClick={() => handleSelect('checkin')}
               className={`${menuCardClass} hover:border-emerald-400/60 hover:bg-emerald-900/40`}
             >
+              <ModuleBgImage url={MODULE_BG.checkin} />
               <div className="absolute inset-0 bg-gradient-to-tl from-emerald-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
               <span className={`${menuCardIconClass} text-emerald-300 group-hover:text-emerald-200`}>
                 calendar_month
@@ -270,6 +291,7 @@ export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibil
             onClick={() => handleSelect('my_cell')}
             className={`${menuCardClass} hover:border-slate-400/60 hover:bg-slate-800/60`}
           >
+            <ModuleBgImage url={MODULE_BG.myCell} />
             <div className="absolute inset-0 bg-gradient-to-bl from-slate-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
             <span className={`${menuCardIconClass} text-slate-300 group-hover:text-white`}>
               diversity_3
@@ -290,6 +312,7 @@ export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibil
             onClick={() => handleSelect('prayer')}
             className={`${menuCardClass} hover:border-rose-400/60 hover:bg-rose-900/40`}
           >
+            <ModuleBgImage url={MODULE_BG.prayer} />
             <div className="absolute inset-0 bg-gradient-to-r from-rose-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
             <span className={`${menuCardIconClass} text-rose-300 group-hover:text-rose-200`}>
               {(brand.id === 'ymcactx' || brand.id === 'imocarwash') ? 'chat' : 'volunteer_activism'}
@@ -430,56 +453,6 @@ export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibil
           <span>{brand.termPastoral}</span>
         </button>
 
-        {isAdminMode && (
-          <>
-            {/* Voltar */}
-            <button
-              type="button"
-              onClick={handleHomeClick}
-              className="w-16 h-16 flex items-center justify-center text-white/80 hover:text-white bg-white/5 hover:bg-white/20 rounded-full transition-all duration-200 active:scale-95 cursor-pointer font-bold font-sans border border-transparent hover:border-white/10"
-              title="Voltar"
-            >
-              <span className="material-symbols-outlined !text-2xl">arrow_back</span>
-            </button>
-
-            <div className="w-px h-12 bg-white/10 mx-1" aria-hidden="true" />
-
-            {/* Ajuda */}
-            <button
-              type="button"
-              onClick={handleHelpClick}
-              className="w-16 h-16 flex items-center justify-center text-white/80 hover:text-white bg-white/5 hover:bg-white/20 rounded-full transition-all duration-200 active:scale-95 cursor-pointer font-bold font-sans border border-transparent hover:border-white/10"
-              title="Ajuda"
-            >
-              <span className="material-symbols-outlined !text-2xl">help_outline</span>
-            </button>
-
-            {/* Acessibilidade */}
-            <button
-              type="button"
-              onClick={handleAccessibilityClick}
-              className="w-16 h-16 flex items-center justify-center text-white/80 hover:text-white bg-white/5 hover:bg-white/20 rounded-full transition-all duration-200 active:scale-95 cursor-pointer font-bold font-sans border border-transparent hover:border-white/10"
-              title="Acessibilidade"
-            >
-              <span className="material-symbols-outlined !text-2xl">settings_accessibility</span>
-            </button>
-
-            {/* Administração */}
-            {onOpenAdmin && (
-              <button
-                type="button"
-                onClick={() => {
-                  playTapSound();
-                  onOpenAdmin();
-                }}
-                className="w-16 h-16 flex items-center justify-center text-white/80 hover:text-white bg-white/5 hover:bg-white/20 rounded-full transition-all duration-200 active:scale-95 cursor-pointer font-bold font-sans border border-transparent hover:border-white/10"
-                title="Admin"
-              >
-                <span className="material-symbols-outlined !text-xl">admin_panel_settings</span>
-              </button>
-            )}
-          </>
-        )}
       </footer>
 
       {/* YMCA App / Locator QR Code Modal Overlay */}

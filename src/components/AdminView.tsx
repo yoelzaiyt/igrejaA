@@ -5,28 +5,66 @@ import { playTapSound, playSuccessSound } from '../utils/audio';
 import { speakText } from '../utils/tts';
 import { Lang } from '../utils/i18n';
 import { clearRegistrations, deleteRegistration, fetchRegistrations, TotemRegistration } from '../lib/registrations';
+import { fetchContributions, Contribution } from '../lib/contributions';
+import { fetchTotemsMap } from '../lib/totems';
+import { listGateways, saveGateway, testGateway, toggleGateway, GatewaySummary, GatewayProvider, PaymentMethod } from '../lib/paymentGateways';
 import { DEFAULT_WHATSAPP_NUMBER, openWhatsAppNotification } from '../utils/whatsapp';
+import { logAuditEvent, AdminProfile } from '../lib/auth';
 
 interface AdminViewProps {
   onBack: () => void;
   brand: BrandConfig;
   lang: Lang;
+  profile?: AdminProfile;
 }
 
-type ActiveTab = 'general' | 'visual' | 'vocabulary' | 'pastors' | 'cells' | 'slides' | 'registrations';
+type ActiveTab = 'general' | 'visual' | 'vocabulary' | 'pastors' | 'cells' | 'slides' | 'registrations' | 'contributions' | 'payments';
 
-export default function AdminView({ onBack, brand: activeBrand, lang }: AdminViewProps) {
-  const [allBrands, setAllBrands] = useState<Record<string, BrandConfig>>(() => getStoredBrands());
+const GATEWAY_LABELS: Record<GatewayProvider, string> = {
+  mercadopago: 'Mercado Pago',
+  stone: 'Stone',
+  cielo: 'Cielo',
+  pagbank: 'PagBank',
+};
+
+export default function AdminView({ onBack, brand: activeBrand, lang, profile }: AdminViewProps) {
+  const isMaster = !profile || profile.role === 'master';
+  const [allBrandsRaw, setAllBrands] = useState<Record<string, BrandConfig>>(() => getStoredBrands());
+  // Perfis não-master só enxergam a própria igreja, mesmo que outras marcas
+  // existam no localStorage — o RLS já bloqueia no banco; isto reforça na UI.
+  const allBrands = isMaster || !profile?.brandId
+    ? allBrandsRaw
+    : { [profile.brandId]: allBrandsRaw[profile.brandId] };
   const [selectedBrandId, setSelectedBrandId] = useState<string>(activeBrand.id);
   const [activeTab, setActiveTab] = useState<ActiveTab>('general');
   const [registrations, setRegistrations] = useState<TotemRegistration[]>([]);
+  const [contributions, setContributions] = useState<Contribution[]>([]);
+  const [contributionStatusFilter, setContributionStatusFilter] = useState<string>('all');
+  const [contributionMethodFilter, setContributionMethodFilter] = useState<string>('all');
+  const [contributionDateFrom, setContributionDateFrom] = useState<string>('');
+  const [contributionDateTo, setContributionDateTo] = useState<string>('');
+  const [totemsMap, setTotemsMap] = useState<Record<string, string>>({});
+  const [gateways, setGateways] = useState<GatewaySummary[]>([]);
+  const [gatewayProvider, setGatewayProvider] = useState<GatewayProvider>('mercadopago');
+  const [gatewayAccessToken, setGatewayAccessToken] = useState('');
+  const [gatewayEnabledMethods, setGatewayEnabledMethods] = useState<PaymentMethod[]>(['pix', 'credit', 'debit']);
+  const [gatewayBusy, setGatewayBusy] = useState<'testing' | 'saving' | null>(null);
+  const [gatewayMessage, setGatewayMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     void fetchRegistrations().then(setRegistrations);
+    void fetchContributions().then(setContributions);
+    // Master sees every church's contributions at once, so it needs every
+    // church's totem labels too — non-master is scoped to its own church.
+    void fetchTotemsMap(isMaster ? undefined : profile.brandId).then(setTotemsMap);
   }, []);
 
+  useEffect(() => {
+    void listGateways(selectedBrandId).then(setGateways);
+  }, [selectedBrandId]);
+
   // Selected brand state
-  const currentEditingBrand = allBrands[selectedBrandId] || allBrands.atitude;
+  const currentEditingBrand = allBrands[selectedBrandId] || Object.values(allBrands)[0];
 
   // Pastor adding state
   const [newPastor, setNewPastor] = useState<Omit<Pastor, 'id'>>({
@@ -123,6 +161,7 @@ export default function AdminView({ onBack, brand: activeBrand, lang }: AdminVie
         setSelectedBrandId(Object.keys(allBrands).filter((k) => k !== id)[0]);
       }
       speakText('Igreja removida com sucesso.');
+      void logAuditEvent('brand.delete', { targetType: 'brand', targetId: id, brandId: id });
     }
   };
 
@@ -130,10 +169,14 @@ export default function AdminView({ onBack, brand: activeBrand, lang }: AdminVie
     playSuccessSound();
     saveStoredBrands(allBrands);
     speakText('Configurações salvas no sistema!');
+    void logAuditEvent('brand.save', { targetType: 'brand', targetId: selectedBrandId, brandId: selectedBrandId });
     
     if (shouldRedirect) {
-      // Refresh current page with the client parameter and admin flag
-      window.location.search = `?client=${selectedBrandId}&admin=true`;
+      if (currentEditingBrand.domain) {
+        window.open(`https://${currentEditingBrand.domain}`, '_blank', 'noopener,noreferrer');
+      } else {
+        alert('Esta marca ainda não tem um domínio de totem dedicado configurado. Peça para configurarem um alias de domínio Vercel para ela.');
+      }
     } else {
       alert('Configurações salvas com sucesso localmente!');
     }
@@ -229,6 +272,65 @@ export default function AdminView({ onBack, brand: activeBrand, lang }: AdminVie
     openWhatsAppNotification(number, message);
   };
 
+  // Payment gateway management
+  const handleTestGateway = async () => {
+    if (!gatewayAccessToken.trim()) {
+      setGatewayMessage({ type: 'error', text: 'Cole o Access Token antes de testar.' });
+      return;
+    }
+    setGatewayBusy('testing');
+    setGatewayMessage(null);
+    const result = await testGateway(selectedBrandId, gatewayProvider, { accessToken: gatewayAccessToken.trim() });
+    setGatewayBusy(null);
+    if (result.success) {
+      playSuccessSound();
+      setGatewayMessage({ type: 'success', text: `Conexão OK${result.nickname ? ` (conta: ${result.nickname})` : ''}.` });
+    } else {
+      setGatewayMessage({ type: 'error', text: result.error || 'Falha ao testar a conexão.' });
+    }
+  };
+
+  const handleSaveGateway = async () => {
+    if (!gatewayAccessToken.trim()) {
+      setGatewayMessage({ type: 'error', text: 'Cole o Access Token antes de salvar.' });
+      return;
+    }
+    if (gatewayEnabledMethods.length === 0) {
+      setGatewayMessage({ type: 'error', text: 'Selecione pelo menos um método de pagamento — o totem ficaria sem nenhuma opção.' });
+      return;
+    }
+    setGatewayBusy('saving');
+    setGatewayMessage(null);
+    const result = await saveGateway(selectedBrandId, gatewayProvider, { accessToken: gatewayAccessToken.trim() }, gatewayEnabledMethods);
+    setGatewayBusy(null);
+    if (result.success) {
+      playSuccessSound();
+      if (result.testResult === 'success') {
+        await toggleGateway(selectedBrandId, gatewayProvider, true);
+      }
+      setGatewayMessage({
+        type: result.testResult === 'success' ? 'success' : 'error',
+        text: result.testResult === 'success'
+          ? 'Credencial salva, validada e ativada com sucesso.'
+          : 'Credencial salva, mas o teste de conexão falhou — confira o valor antes de ativar.',
+      });
+      setGatewayAccessToken('');
+      void logAuditEvent('gateway.save', { targetType: 'payment_gateway', targetId: gatewayProvider, brandId: selectedBrandId });
+      void listGateways(selectedBrandId).then(setGateways);
+    } else {
+      setGatewayMessage({ type: 'error', text: result.error || 'Falha ao salvar.' });
+    }
+  };
+
+  const handleToggleGateway = async (provider: GatewayProvider, isActive: boolean) => {
+    playTapSound();
+    const ok = await toggleGateway(selectedBrandId, provider, isActive);
+    if (ok) {
+      void logAuditEvent('gateway.toggle', { targetType: 'payment_gateway', targetId: provider, brandId: selectedBrandId, metadata: { isActive } });
+      void listGateways(selectedBrandId).then(setGateways);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#f3f5f8] text-[#191c1e] flex flex-col font-sans">
       
@@ -288,15 +390,19 @@ export default function AdminView({ onBack, brand: activeBrand, lang }: AdminVie
         {/* Left Church/Client List Sidebar */}
         <aside className="w-full md:w-80 bg-white border-r border-[#e1e4e8] flex flex-col h-1/3 md:h-full overflow-y-auto p-4 shrink-0">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-sm font-black uppercase text-slate-500 tracking-wider">Igrejas & Clientes</h2>
-            <button
-              type="button"
-              onClick={handleAddNewBrand}
-              className="flex items-center justify-center bg-slate-900 text-white hover:bg-slate-800 rounded-full w-8 h-8 cursor-pointer shadow-sm"
-              title="Adicionar Igreja/Cliente"
-            >
-              <span className="material-symbols-outlined !text-lg font-black">add</span>
-            </button>
+            <h2 className="text-sm font-black uppercase text-slate-500 tracking-wider">
+              {isMaster ? 'Igrejas & Clientes' : 'Sua Igreja'}
+            </h2>
+            {isMaster && (
+              <button
+                type="button"
+                onClick={handleAddNewBrand}
+                className="flex items-center justify-center bg-slate-900 text-white hover:bg-slate-800 rounded-full w-8 h-8 cursor-pointer shadow-sm"
+                title="Adicionar Igreja/Cliente"
+              >
+                <span className="material-symbols-outlined !text-lg font-black">add</span>
+              </button>
+            )}
           </div>
 
           <div className="space-y-2 flex-grow">
@@ -323,17 +429,33 @@ export default function AdminView({ onBack, brand: activeBrand, lang }: AdminVie
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeleteBrand(b.id);
-                  }}
-                  className="w-8 h-8 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center transition-colors cursor-pointer"
-                  title="Excluir"
-                >
-                  <span className="material-symbols-outlined !text-lg">delete</span>
-                </button>
+                <div className="flex items-center shrink-0">
+                  {b.domain && (
+                    <a
+                      href={`https://${b.domain}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-8 h-8 rounded-full text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 flex items-center justify-center transition-colors cursor-pointer"
+                      title={`Ver totem público: ${b.domain}`}
+                    >
+                      <span className="material-symbols-outlined !text-lg">open_in_new</span>
+                    </a>
+                  )}
+                  {isMaster && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteBrand(b.id);
+                      }}
+                      className="w-8 h-8 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center transition-colors cursor-pointer"
+                      title="Excluir"
+                    >
+                      <span className="material-symbols-outlined !text-lg">delete</span>
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -352,6 +474,8 @@ export default function AdminView({ onBack, brand: activeBrand, lang }: AdminVie
               { id: 'cells', label: 'Células/GCs', icon: 'hub' },
               { id: 'slides', label: 'Avisos/Carrossel', icon: 'view_carousel' },
               { id: 'registrations', label: 'Cadastros & Solicitações', icon: 'list_alt' },
+              { id: 'contributions', label: 'Contribuições', icon: 'payments' },
+              { id: 'payments', label: 'Gateway de Pagamento', icon: 'credit_card' },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -1050,6 +1174,7 @@ export default function AdminView({ onBack, brand: activeBrand, lang }: AdminVie
                       onClick={() => {
                         if (confirm('Deseja realmente limpar todos os registros do sistema?')) {
                           playTapSound();
+                          void logAuditEvent('registrations.clear_all');
                           void clearRegistrations().then(() => {
                             setRegistrations([]);
                             speakText('Registros apagados.');
@@ -1114,6 +1239,7 @@ export default function AdminView({ onBack, brand: activeBrand, lang }: AdminVie
                                       type="button"
                                       onClick={() => {
                                         playTapSound();
+                                        void logAuditEvent('registration.delete', { targetType: 'registration', targetId: reg.id, brandId: reg.brandId });
                                         void deleteRegistration(reg.id).then(setRegistrations);
                                       }}
                                       className="w-8 h-8 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center transition-colors cursor-pointer"
@@ -1131,6 +1257,392 @@ export default function AdminView({ onBack, brand: activeBrand, lang }: AdminVie
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* TAB 8: CONTRIBUTIONS */}
+            {activeTab === 'contributions' && (() => {
+              const filtered = contributions.filter((c) => {
+                if (!isMaster && c.churchId !== selectedBrandId) return false;
+                if (contributionStatusFilter !== 'all' && c.status !== contributionStatusFilter) return false;
+                if (contributionMethodFilter !== 'all' && c.method !== contributionMethodFilter) return false;
+                const day = c.createdAt.slice(0, 10);
+                if (contributionDateFrom && day < contributionDateFrom) return false;
+                if (contributionDateTo && day > contributionDateTo) return false;
+                return true;
+              });
+              const totalApprovedCents = filtered
+                .filter((c) => c.status === 'approved')
+                .reduce((sum, c) => sum + c.amountCents, 0);
+
+              // Aggregates for the "período" summary (spec: total, PIX/crédito/
+              // débito, aprovadas/recusadas/pendentes, por categoria, por totem, por data)
+              const totalCount = filtered.length;
+              const byMethod = { pix: 0, credit: 0, debit: 0 } as Record<Contribution['method'], number>;
+              const byMethodCents = { pix: 0, credit: 0, debit: 0 } as Record<Contribution['method'], number>;
+              let approvedCount = 0;
+              let rejectedCount = 0;
+              let pendingCount = 0;
+              const byCategory: Record<string, { count: number; cents: number }> = {};
+              const byTotem: Record<string, { count: number; cents: number }> = {};
+              const byDate: Record<string, { count: number; cents: number }> = {};
+
+              for (const c of filtered) {
+                byMethod[c.method] += 1;
+                if (c.status === 'approved') byMethodCents[c.method] += c.amountCents;
+                if (c.status === 'approved') approvedCount += 1;
+                else if (c.status === 'rejected') rejectedCount += 1;
+                else if (c.status === 'pending') pendingCount += 1;
+
+                const cat = byCategory[c.category] || { count: 0, cents: 0 };
+                cat.count += 1;
+                if (c.status === 'approved') cat.cents += c.amountCents;
+                byCategory[c.category] = cat;
+
+                const totemKey = c.totemId || '__none__';
+                const totem = byTotem[totemKey] || { count: 0, cents: 0 };
+                totem.count += 1;
+                if (c.status === 'approved') totem.cents += c.amountCents;
+                byTotem[totemKey] = totem;
+
+                const day = c.createdAt.slice(0, 10);
+                const dateBucket = byDate[day] || { count: 0, cents: 0 };
+                dateBucket.count += 1;
+                if (c.status === 'approved') dateBucket.cents += c.amountCents;
+                byDate[day] = dateBucket;
+              }
+
+              const fmtMoney = (cents: number) => (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+              const statusLabel: Record<Contribution['status'], string> = {
+                pending: 'Pendente',
+                approved: 'Aprovado',
+                rejected: 'Recusado',
+                refunded: 'Estornado',
+                canceled: 'Cancelado',
+              };
+              const statusColor: Record<Contribution['status'], string> = {
+                pending: 'bg-amber-100 text-amber-800',
+                approved: 'bg-emerald-100 text-emerald-800',
+                rejected: 'bg-rose-100 text-rose-800',
+                refunded: 'bg-slate-200 text-slate-700',
+                canceled: 'bg-slate-200 text-slate-700',
+              };
+              const methodLabel: Record<Contribution['method'], string> = {
+                pix: 'PIX',
+                credit: 'Crédito',
+                debit: 'Débito',
+              };
+
+              return (
+                <div className="space-y-6 animate-fade-in">
+                  <div className="flex flex-wrap justify-between items-center gap-3 border-b pb-2 border-slate-100">
+                    <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
+                      <span className="material-symbols-outlined text-slate-500">payments</span>
+                      <span>Contribuições Registradas</span>
+                    </h3>
+                    <div className="text-right">
+                      <p className="text-[10px] uppercase font-black text-slate-400 tracking-wider">Total aprovado (filtro atual)</p>
+                      <p className="text-xl font-black text-emerald-600">
+                        {(totalApprovedCents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-3">
+                    <select
+                      value={contributionStatusFilter}
+                      onChange={(e) => setContributionStatusFilter(e.target.value)}
+                      className="bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-700"
+                    >
+                      <option value="all">Todos os status</option>
+                      <option value="pending">Pendente</option>
+                      <option value="approved">Aprovado</option>
+                      <option value="rejected">Recusado</option>
+                      <option value="refunded">Estornado</option>
+                      <option value="canceled">Cancelado</option>
+                    </select>
+                    <select
+                      value={contributionMethodFilter}
+                      onChange={(e) => setContributionMethodFilter(e.target.value)}
+                      className="bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-700"
+                    >
+                      <option value="all">Todos os métodos</option>
+                      <option value="pix">PIX</option>
+                      <option value="credit">Crédito</option>
+                      <option value="debit">Débito</option>
+                    </select>
+                    <input
+                      type="date"
+                      value={contributionDateFrom}
+                      onChange={(e) => setContributionDateFrom(e.target.value)}
+                      className="bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-700"
+                      aria-label="Data inicial"
+                    />
+                    <input
+                      type="date"
+                      value={contributionDateTo}
+                      onChange={(e) => setContributionDateTo(e.target.value)}
+                      className="bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-700"
+                      aria-label="Data final"
+                    />
+                  </div>
+
+                  {/* Período summary tiles */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="bg-white border border-slate-200 rounded-2xl p-4">
+                      <p className="text-[10px] uppercase font-black text-slate-400 tracking-wider">Total do período</p>
+                      <p className="text-lg font-black text-slate-800">{totalCount}</p>
+                    </div>
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
+                      <p className="text-[10px] uppercase font-black text-emerald-600 tracking-wider">Aprovadas</p>
+                      <p className="text-lg font-black text-emerald-700">{approvedCount}</p>
+                    </div>
+                    <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4">
+                      <p className="text-[10px] uppercase font-black text-rose-600 tracking-wider">Recusadas</p>
+                      <p className="text-lg font-black text-rose-700">{rejectedCount}</p>
+                    </div>
+                    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+                      <p className="text-[10px] uppercase font-black text-amber-600 tracking-wider">Pendentes</p>
+                      <p className="text-lg font-black text-amber-700">{pendingCount}</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center justify-between">
+                      <span className="text-xs font-black uppercase tracking-wider text-slate-500">PIX</span>
+                      <span className="text-sm font-black text-slate-800">{byMethod.pix} · {fmtMoney(byMethodCents.pix)}</span>
+                    </div>
+                    <div className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center justify-between">
+                      <span className="text-xs font-black uppercase tracking-wider text-slate-500">Crédito</span>
+                      <span className="text-sm font-black text-slate-800">{byMethod.credit} · {fmtMoney(byMethodCents.credit)}</span>
+                    </div>
+                    <div className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center justify-between">
+                      <span className="text-xs font-black uppercase tracking-wider text-slate-500">Débito</span>
+                      <span className="text-sm font-black text-slate-800">{byMethod.debit} · {fmtMoney(byMethodCents.debit)}</span>
+                    </div>
+                  </div>
+
+                  {filtered.length > 0 && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="bg-white border border-slate-200 rounded-2xl p-4">
+                        <p className="text-[10px] uppercase font-black text-slate-400 tracking-wider mb-2">Por categoria</p>
+                        <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                          {Object.entries(byCategory).map(([cat, agg]) => (
+                            <div key={cat} className="flex items-center justify-between text-xs">
+                              <span className="font-bold text-slate-700 truncate pr-2">{cat}</span>
+                              <span className="text-slate-500 shrink-0">{agg.count} · {fmtMoney(agg.cents)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="bg-white border border-slate-200 rounded-2xl p-4">
+                        <p className="text-[10px] uppercase font-black text-slate-400 tracking-wider mb-2">Por totem</p>
+                        <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                          {Object.entries(byTotem).map(([totemId, agg]) => (
+                            <div key={totemId} className="flex items-center justify-between text-xs">
+                              <span className="font-bold text-slate-700 truncate pr-2">
+                                {totemId === '__none__' ? 'Sem totem identificado' : totemsMap[totemId] || totemId}
+                              </span>
+                              <span className="text-slate-500 shrink-0">{agg.count} · {fmtMoney(agg.cents)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="bg-white border border-slate-200 rounded-2xl p-4">
+                        <p className="text-[10px] uppercase font-black text-slate-400 tracking-wider mb-2">Por data</p>
+                        <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                          {Object.entries(byDate)
+                            .sort((a, b) => b[0].localeCompare(a[0]))
+                            .map(([day, agg]) => (
+                              <div key={day} className="flex items-center justify-between text-xs">
+                                <span className="font-bold text-slate-700">{new Date(`${day}T00:00:00`).toLocaleDateString('pt-BR')}</span>
+                                <span className="text-slate-500 shrink-0">{agg.count} · {fmtMoney(agg.cents)}</span>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {filtered.length === 0 ? (
+                    <div className="text-center py-16 border-2 border-dashed border-slate-200 rounded-3xl text-slate-400 font-bold text-xs space-y-2">
+                      <span className="material-symbols-outlined !text-4xl text-slate-350">inbox</span>
+                      <p>Nenhuma contribuição encontrada para este filtro.</p>
+                    </div>
+                  ) : (
+                    <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm bg-white">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black uppercase text-slate-500 tracking-wider">
+                              <th className="p-4">Data</th>
+                              {isMaster && <th className="p-4">Igreja</th>}
+                              <th className="p-4">Categoria</th>
+                              <th className="p-4">Método</th>
+                              <th className="p-4">Valor</th>
+                              <th className="p-4">Status</th>
+                              <th className="p-4">ID Mercado Pago</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-150 text-xs font-semibold text-slate-700">
+                            {filtered.map((c) => (
+                              <tr key={c.id} className="hover:bg-slate-50/50 transition-colors">
+                                <td className="p-4 whitespace-nowrap text-slate-450">{new Date(c.createdAt).toLocaleString('pt-BR')}</td>
+                                {isMaster && (
+                                  <td className="p-4 font-bold text-slate-800">{allBrandsRaw[c.churchId]?.name || c.churchId}</td>
+                                )}
+                                <td className="p-4">{c.category}</td>
+                                <td className="p-4">{methodLabel[c.method]}</td>
+                                <td className="p-4 font-bold">{(c.amountCents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
+                                <td className="p-4">
+                                  <span className={`text-[9px] font-black uppercase tracking-wider px-2.5 py-1 rounded-md inline-block ${statusColor[c.status]}`}>
+                                    {statusLabel[c.status]}
+                                  </span>
+                                </td>
+                                <td className="p-4 font-mono text-slate-450">{c.mpPaymentId || '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* TAB 9: PAYMENT GATEWAYS */}
+            {activeTab === 'payments' && (
+              <div className="space-y-6 animate-fade-in">
+                <h3 className="text-lg font-black text-slate-800 border-b pb-2 border-slate-100 flex items-center gap-2">
+                  <span className="material-symbols-outlined text-slate-500">credit_card</span>
+                  <span>Gateway de Pagamento — {currentEditingBrand.name}</span>
+                </h3>
+
+                <p className="text-xs text-slate-500 font-medium leading-relaxed max-w-2xl">
+                  Cada igreja pode usar sua própria conta de pagamento. Sem nenhum gateway ativo aqui,
+                  o totem usa a conta Mercado Pago compartilhada da plataforma automaticamente.
+                </p>
+
+                {/* Configured gateways list */}
+                <div className="space-y-3">
+                  <h4 className="text-xs font-black text-slate-500 uppercase tracking-widest">Gateways Configurados</h4>
+                  {gateways.length === 0 ? (
+                    <div className="text-center py-8 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 font-bold text-xs">
+                      Nenhum gateway próprio configurado — usando a conta compartilhada.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {gateways.map((g) => (
+                        <div key={g.id} className="bg-white border border-slate-200 p-4 rounded-2xl flex items-center justify-between gap-3 shadow-sm">
+                          <div>
+                            <h5 className="font-extrabold text-sm text-slate-800">{GATEWAY_LABELS[g.provider]}</h5>
+                            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                              {g.last_test_result === 'success' ? '✓ Testado com sucesso' : g.last_test_result === 'failure' ? '✕ Último teste falhou' : 'Não testado'}
+                              {g.last_tested_at ? ` · ${new Date(g.last_tested_at).toLocaleDateString('pt-BR')}` : ''}
+                            </p>
+                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-1">
+                              Métodos: {(g.enabled_methods || ['pix', 'credit', 'debit']).map((m) => ({ pix: 'PIX', credit: 'Crédito', debit: 'Débito' }[m])).join(', ')}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleGateway(g.provider, !g.is_active)}
+                            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider cursor-pointer transition-all ${
+                              g.is_active
+                                ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                            }`}
+                          >
+                            {g.is_active ? 'Ativo' : 'Inativo'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Add/update credential form */}
+                <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-4">
+                  <h4 className="text-xs font-black text-slate-600 uppercase tracking-widest">Configurar Provedor</h4>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <label className="text-xs uppercase tracking-wider font-extrabold text-slate-500">Provedor</label>
+                      <select
+                        value={gatewayProvider}
+                        onChange={(e) => { setGatewayProvider(e.target.value as GatewayProvider); setGatewayMessage(null); }}
+                        className="w-full bg-white border border-slate-300 rounded-xl p-3 text-slate-800 font-semibold text-sm"
+                      >
+                        <option value="mercadopago">Mercado Pago</option>
+                        <option value="stone">Stone (em breve)</option>
+                        <option value="cielo">Cielo (em breve)</option>
+                        <option value="pagbank">PagBank (em breve)</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs uppercase tracking-wider font-extrabold text-slate-500">Access Token</label>
+                      <input
+                        type="password"
+                        value={gatewayAccessToken}
+                        onChange={(e) => setGatewayAccessToken(e.target.value)}
+                        placeholder="Cole a credencial secreta do provedor"
+                        className="w-full bg-white border border-slate-300 rounded-xl p-3 text-slate-800 font-mono text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs uppercase tracking-wider font-extrabold text-slate-500">Métodos Habilitados</label>
+                    <div className="flex flex-wrap gap-4">
+                      {([
+                        ['pix', 'PIX'],
+                        ['credit', 'Crédito'],
+                        ['debit', 'Débito'],
+                      ] as [PaymentMethod, string][]).map(([method, label]) => (
+                        <label key={method} className="flex items-center gap-2 text-sm font-semibold text-slate-700 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={gatewayEnabledMethods.includes(method)}
+                            onChange={(e) => {
+                              setGatewayEnabledMethods((prev) =>
+                                e.target.checked ? [...prev, method] : prev.filter((m) => m !== method)
+                              );
+                            }}
+                            className="w-4 h-4 accent-slate-900"
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {gatewayMessage && (
+                    <div className={`text-xs font-bold ${gatewayMessage.type === 'success' ? 'text-emerald-600' : 'text-red-600'}`}>
+                      {gatewayMessage.text}
+                    </div>
+                  )}
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      disabled={gatewayBusy !== null}
+                      onClick={handleTestGateway}
+                      className="bg-white border border-slate-300 text-slate-700 font-bold text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl cursor-pointer hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      {gatewayBusy === 'testing' ? 'Testando...' : 'Testar Conexão'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={gatewayBusy !== null}
+                      onClick={handleSaveGateway}
+                      className="bg-slate-900 text-white font-bold text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl cursor-pointer hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      {gatewayBusy === 'saving' ? 'Salvando...' : 'Salvar e Ativar'}
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 
