@@ -1,0 +1,66 @@
+import { supabase } from './supabase';
+
+export interface AdminProfile {
+  id: string;
+  role: 'master' | 'church_admin';
+  brandId: string | null;
+  email: string | null;
+}
+
+export async function signInAdmin(email: string, password: string): Promise<{ error: string | null }> {
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) return { error: error.message };
+  return { error: null };
+}
+
+export async function signOutAdmin(): Promise<void> {
+  await supabase.auth.signOut();
+}
+
+export async function requestPasswordReset(email: string): Promise<{ error: string | null }> {
+  const redirectTo = typeof window !== 'undefined' ? window.location.origin : undefined;
+  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+  if (error) return { error: error.message };
+  return { error: null };
+}
+
+export async function updateOwnPassword(newPassword: string): Promise<{ error: string | null }> {
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) return { error: error.message };
+  return { error: null };
+}
+
+export async function getAdminProfile(): Promise<AdminProfile | null> {
+  const { data: userData } = await supabase.auth.getUser();
+  const user = userData?.user;
+  if (!user) return null;
+
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, role, brand_id, email')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  return { id: data.id, role: data.role, brandId: data.brand_id, email: data.email };
+}
+
+export async function logAuditEvent(action: string, details: {
+  targetType?: string;
+  targetId?: string;
+  brandId?: string;
+  metadata?: Record<string, unknown>;
+} = {}): Promise<void> {
+  const { data: userData } = await supabase.auth.getUser();
+  const user = userData?.user;
+  await supabase.from('audit_logs').insert({
+    actor_id: user?.id,
+    actor_email: user?.email,
+    action,
+    target_type: details.targetType,
+    target_id: details.targetId,
+    brand_id: details.brandId,
+    metadata: details.metadata,
+  });
+}

@@ -9,7 +9,13 @@ const rootDir = path.resolve(__dirname, '..');
 dotenv.config({ path: path.join(rootDir, '.env.local') });
 dotenv.config({ path: path.join(rootDir, '.env') });
 
-const projectRef = 'tyekzbzzqkykwlcfzlve';
+const supabaseUrl =
+  process.env.VITE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const projectRef = supabaseUrl.replace('https://', '').split('.')[0];
+if (!projectRef) {
+  console.error('Could not determine Supabase project ref from VITE_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL.');
+  process.exit(1);
+}
 const migrationFile = path.join(
   rootDir,
   'supabase',

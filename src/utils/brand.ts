@@ -3,6 +3,7 @@ import { CellGroup, Pastor, Slide } from '../types';
 export interface BrandConfig {
   id: string;
   name: string;
+  domain?: string;
   campusName: string;
   logoUrl: string;
   bgUrl: string;
@@ -38,6 +39,7 @@ export interface BrandConfig {
 export const brands: Record<string, BrandConfig> = {
   atitude: {
     id: 'atitude',
+    domain: 'santuario-atitude.vercel.app',
     name: 'Atitude',
     campusName: 'Alphaville',
     logoUrl: 'https://i0.wp.com/igrejaatitude.com.br/wp-content/themes/ibatitude/images/logo.png',
@@ -161,6 +163,7 @@ export const brands: Record<string, BrandConfig> = {
   },
   icconselheira: {
     id: 'icconselheira',
+    domain: 'santuario-icc.vercel.app',
     name: 'Igreja Cristã Conselheira',
     campusName: 'ICC',
     logoUrl: '/images/icc/logo.png',
@@ -255,6 +258,7 @@ export const brands: Record<string, BrandConfig> = {
   },
   lagoinha: {
     id: 'lagoinha',
+    domain: 'santuario-lagoinha.vercel.app',
     name: 'Lagoinha',
     campusName: 'Alphaville',
     logoUrl: '/images/lagoinha/logo.png',
@@ -353,6 +357,7 @@ export const brands: Record<string, BrandConfig> = {
   },
   universal: {
     id: 'universal',
+    domain: 'santuario-universal.vercel.app',
     name: 'Universal',
     campusName: 'Templo de Salomão',
     logoUrl: '/images/universal/logo.png',
@@ -451,6 +456,7 @@ export const brands: Record<string, BrandConfig> = {
   },
   beityaacov: {
     id: 'beityaacov',
+    domain: 'santuario-beityaacov.vercel.app',
     name: 'Beit Yaacov',
     campusName: 'Congregação',
     logoUrl: '/images/beityaacov/logo.png',
@@ -549,6 +555,7 @@ export const brands: Record<string, BrandConfig> = {
   },
   ibmalphaville: {
     id: 'ibmalphaville',
+    domain: 'santuario-ibm.vercel.app',
     name: 'IBM Alphaville',
     campusName: 'Sede Tamboré',
     logoUrl: '/images/ibm/logo.png',
@@ -712,14 +719,40 @@ export function saveStoredBrands(updatedBrands: Record<string, BrandConfig>) {
   }
 }
 
+// Domínio do hub central (link único que lista todas as igrejas/marcas).
+// Ajuste aqui se um domínio próprio for configurado no Vercel.
+export const CENTRAL_HOSTS = ['igreja-a-santuario-digital.vercel.app'];
+
+export function isCentralHost(): boolean {
+  if (typeof window === 'undefined') return false;
+  return CENTRAL_HOSTS.includes(window.location.hostname.toLowerCase());
+}
+
+function getBrandIdFromHostname(): string | null {
+  if (typeof window === 'undefined') return null;
+  const hostname = window.location.hostname.toLowerCase();
+  const match = Object.values(brands).find((b) => b.domain?.toLowerCase() === hostname);
+  return match ? match.id : null;
+}
+
 export function getCurrentBrand(): BrandConfig {
   if (typeof window === 'undefined') {
     return brands.atitude;
   }
-  
+
+  const dynamicBrands = getStoredBrands();
   const params = new URLSearchParams(window.location.search);
-  let client = (params.get('client') || 'atitude').toLowerCase().trim();
-  
+  const explicitClient = params.get('client');
+
+  let client: string;
+  if (explicitClient) {
+    // ?client= sempre tem prioridade (usado no hub central e em testes/preview)
+    client = explicitClient.toLowerCase().trim();
+  } else {
+    // Sem query param: o domínio dedicado da igreja decide a marca
+    client = getBrandIdFromHostname() || 'atitude';
+  }
+
   if (client === 'ibm' || client === 'ibm-alphaville' || client === 'ibmalphaville') {
     client = 'ibmalphaville';
   } else if (client === 'lagoinha' || client === 'lagoinhaalphaville' || client === 'lagoinha-alphaville') {
@@ -731,8 +764,7 @@ export function getCurrentBrand(): BrandConfig {
   } else if (client === 'icc' || client === 'icconselheira') {
     client = 'icconselheira';
   }
-  
-  const dynamicBrands = getStoredBrands();
+
   return dynamicBrands[client] || dynamicBrands.atitude || brands.atitude;
 }
 

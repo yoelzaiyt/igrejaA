@@ -20,7 +20,6 @@ const PARTICLES = Array.from({ length: 18 }, (_, i) => ({
 interface HomeViewProps {
   onStart: () => void;
   onOpenAccessibility: () => void;
-  onOpenAdmin?: () => void;
   brand: BrandConfig;
   lang: Lang;
   onLanguageChange: (lang: Lang) => void;
@@ -32,7 +31,6 @@ interface HomeViewProps {
 export default function HomeView({
   onStart,
   onOpenAccessibility,
-  onOpenAdmin,
   brand,
   lang,
   onLanguageChange,
@@ -282,17 +280,6 @@ export default function HomeView({
 
         {/* Action buttons */}
         <div className="flex items-center gap-2" role="group" aria-label="Ações">
-          {onOpenAdmin && (
-            <button
-              type="button"
-              onClick={() => { playTapSound(); onOpenAdmin(); }}
-              className="w-11 h-11 rounded-full bg-white/8 hover:bg-white/18 border border-white/12 hover:scale-105 active:scale-95 transition-all flex items-center justify-center cursor-pointer backdrop-blur-xl"
-              aria-label="Abrir painel administrativo"
-              title="Admin"
-            >
-              <span className="material-symbols-outlined font-light !text-xl" aria-hidden="true">settings</span>
-            </button>
-          )}
           <button
             type="button"
             onClick={handleLang}

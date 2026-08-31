@@ -24,31 +24,6 @@ const dictionary: Record<string, Record<Lang, string>> = {
   next: { pt: 'Avançar', en: 'Next', es: 'Siguiente', de: 'Weiter' },
   finish: { pt: 'Finalizar', en: 'Finish', es: 'Finalizar', de: 'Abschließen' },
   copied: { pt: 'Copiado!', en: 'Copied!', es: '¡Copiado!', de: 'Kopiert!' },
-  adminPasscodePrompt: {
-    pt: 'Digite a senha de administrador para continuar',
-    en: 'Enter the admin passcode to continue',
-    es: 'Ingrese la contraseña de administrador para continuar',
-    de: 'Geben Sie den Admin-Passcode ein, um fortzufahren'
-  },
-  adminPasscodeInvalid: {
-    pt: 'Senha incorreta!',
-    en: 'Incorrect passcode!',
-    es: '¡Contraseña incorrecta!',
-    de: 'Falscher Passcode!'
-  },
-  adminPasscodeAttempts: {
-    pt: 'Tentativas restantes',
-    en: 'Remaining attempts',
-    es: 'Intentos restantes',
-    de: 'Verbleibende Versuche'
-  },
-  adminPasscodeBlocked: {
-    pt: 'Acesso bloqueado por segurança.',
-    en: 'Access blocked for security.',
-    es: 'Acceso bloqueado por seguridad.',
-    de: 'Zugriff aus Sicherheitsgründen gesperrt.'
-  },
-
   // Home View
   welcome: { pt: 'Bem-vindo', en: 'Welcome', es: 'Bienvenido', de: 'Willkommen' },
   welcomeVoice: {
