@@ -51,6 +51,9 @@ export interface CellGroup {
   hour: string;
   leader: string;
   phone: string;
+  whatsappInstitutional?: string;
+  memberCount?: number;
+  status?: 'ativo' | 'inativo';
 }
 
 export interface Pastor {
@@ -59,6 +62,12 @@ export interface Pastor {
   role: string;
   available: boolean;
   photoUrl: string;
+  phone?: string;
+  whatsapp?: string;
+  email?: string;
+  notes?: string;
+  status?: 'ativo' | 'inativo';
+  cellGroupId?: string;
 }
 
 export interface Slide {

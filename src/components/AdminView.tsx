@@ -27,6 +27,64 @@ const GATEWAY_LABELS: Record<GatewayProvider, string> = {
   pagbank: 'PagBank',
 };
 
+// Valor inicial do formulário de líder/célula — reaproveitado tanto pra
+// "adicionar novo" quanto pra resetar depois de salvar uma edição.
+const BLANK_PASTOR: Omit<Pastor, 'id'> = {
+  name: '',
+  role: '',
+  photoUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=400&fit=crop&q=80',
+  available: true,
+  phone: '',
+  whatsapp: '',
+  email: '',
+  notes: '',
+  status: 'ativo',
+  cellGroupId: '',
+};
+
+// Navegação em 2 níveis — reduz os 9 itens de menu antigos a 6 grupos
+// visíveis, sem remover nenhuma funcionalidade (só reagrupa Dados Gerais/
+// Identidade Visual/Vocabulário e Pastores/Células, que ganham uma segunda
+// fileira de sub-abas quando o grupo está ativo).
+type TabGroup = {
+  id: string;
+  label: string;
+  icon: string;
+  children?: { id: ActiveTab; label: string; icon: string }[];
+};
+
+const TAB_GROUPS: TabGroup[] = [
+  {
+    id: 'general', label: 'Dados Gerais', icon: 'info', children: [
+      { id: 'general', label: 'Informações', icon: 'info' },
+      { id: 'visual', label: 'Identidade Visual', icon: 'palette' },
+      { id: 'vocabulary', label: 'Vocabulário', icon: 'dictionary' },
+    ],
+  },
+  {
+    id: 'pastors', label: 'Liderança & Grupos', icon: 'groups', children: [
+      { id: 'pastors', label: 'Pastores/Líderes', icon: 'groups' },
+      { id: 'cells', label: 'Células/GCs', icon: 'hub' },
+    ],
+  },
+  { id: 'slides', label: 'Avisos/Carrossel', icon: 'view_carousel' },
+  { id: 'registrations', label: 'Cadastros & Solicitações', icon: 'list_alt' },
+  { id: 'contributions', label: 'Contribuições', icon: 'payments' },
+  { id: 'payments', label: 'Gateway de Pagamento', icon: 'credit_card' },
+];
+
+const BLANK_CELL: Omit<CellGroup, 'id'> = {
+  name: '',
+  neighborhood: '',
+  day: 'Quarta-feira',
+  hour: '20:00',
+  leader: '',
+  phone: '',
+  whatsappInstitutional: '',
+  memberCount: undefined,
+  status: 'ativo',
+};
+
 export default function AdminView({ onBack, brand: activeBrand, lang, profile }: AdminViewProps) {
   const isMaster = !profile || profile.role === 'master';
   const [allBrandsRaw, setAllBrands] = useState<Record<string, BrandConfig>>(() => getStoredBrands());
@@ -83,23 +141,14 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
   // Selected brand state
   const currentEditingBrand = allBrands[selectedBrandId] || Object.values(allBrands)[0];
 
-  // Pastor adding state
-  const [newPastor, setNewPastor] = useState<Omit<Pastor, 'id'>>({
-    name: '',
-    role: '',
-    photoUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=400&fit=crop&q=80',
-    available: true,
-  });
+  // Formulário de líder — mesmo estado serve pra "adicionar novo" (editingPastorId
+  // null) e pra "editar existente" (editingPastorId setado ao clicar em editar).
+  const [newPastor, setNewPastor] = useState<Omit<Pastor, 'id'>>(BLANK_PASTOR);
+  const [editingPastorId, setEditingPastorId] = useState<string | null>(null);
 
-  // Cell adding state
-  const [newCell, setNewCell] = useState<Omit<CellGroup, 'id'>>({
-    name: '',
-    neighborhood: '',
-    day: 'Quarta-feira',
-    hour: '20:00',
-    leader: '',
-    phone: '',
-  });
+  // Mesmo padrão pra células/GCs.
+  const [newCell, setNewCell] = useState<Omit<CellGroup, 'id'>>(BLANK_CELL);
+  const [editingCellId, setEditingCellId] = useState<string | null>(null);
 
   // Slide adding state
   const [newSlide, setNewSlide] = useState<Slide>({
@@ -216,56 +265,104 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
     }
   };
 
-  // Pastors Management
-  const handleAddPastor = () => {
+  // Pastors Management — o mesmo formulário serve pra criar (editingPastorId
+  // null) e editar (editingPastorId setado por handleStartEditPastor).
+  const handleSavePastor = () => {
     if (!newPastor.name || !newPastor.role) {
       alert('Preencha o nome e o cargo do pastor/rabino.');
       return;
     }
     playSuccessSound();
-    const id = `pastor_${Date.now()}`;
-    const updatedPastors = [...(currentEditingBrand.pastors || []), { ...newPastor, id }];
+    const existing = currentEditingBrand.pastors || [];
+    const updatedPastors = editingPastorId
+      ? existing.map((p) => (p.id === editingPastorId ? { ...newPastor, id: editingPastorId } : p))
+      : [...existing, { ...newPastor, id: `pastor_${Date.now()}` }];
     handleFieldChange('pastors', updatedPastors);
+    setNewPastor(BLANK_PASTOR);
+    setEditingPastorId(null);
+    speakText(editingPastorId ? 'Líder atualizado.' : 'Líder adicionado.');
+  };
+
+  const handleStartEditPastor = (p: Pastor) => {
+    playTapSound();
+    setEditingPastorId(p.id);
     setNewPastor({
-      name: '',
-      role: '',
-      photoUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=400&fit=crop&q=80',
-      available: true,
+      name: p.name,
+      role: p.role,
+      photoUrl: p.photoUrl,
+      available: p.available,
+      phone: p.phone || '',
+      whatsapp: p.whatsapp || '',
+      email: p.email || '',
+      notes: p.notes || '',
+      status: p.status || 'ativo',
+      cellGroupId: p.cellGroupId || '',
     });
-    speakText('Líder adicionado.');
+  };
+
+  const handleCancelEditPastor = () => {
+    playTapSound();
+    setEditingPastorId(null);
+    setNewPastor(BLANK_PASTOR);
   };
 
   const handleDeletePastor = (pastorId: string) => {
     playTapSound();
     const updatedPastors = (currentEditingBrand.pastors || []).filter((p) => p.id !== pastorId);
     handleFieldChange('pastors', updatedPastors);
+    if (editingPastorId === pastorId) {
+      setEditingPastorId(null);
+      setNewPastor(BLANK_PASTOR);
+    }
   };
 
-  // Cells Management
-  const handleAddCell = () => {
+  // Cells Management — mesmo padrão de criar/editar do Pastors acima.
+  const handleSaveCell = () => {
     if (!newCell.name || !newCell.leader || !newCell.phone) {
       alert('Preencha o nome da célula/GC, líder e telefone de contato.');
       return;
     }
     playSuccessSound();
-    const id = `cell_${Date.now()}`;
-    const updatedCells = [...(currentEditingBrand.cellGroups || []), { ...newCell, id }];
+    const existing = currentEditingBrand.cellGroups || [];
+    const updatedCells = editingCellId
+      ? existing.map((c) => (c.id === editingCellId ? { ...newCell, id: editingCellId } : c))
+      : [...existing, { ...newCell, id: `cell_${Date.now()}` }];
     handleFieldChange('cellGroups', updatedCells);
+    setNewCell(BLANK_CELL);
+    setEditingCellId(null);
+    speakText(editingCellId ? 'Grupo atualizado.' : 'Grupo de conexão adicionado.');
+  };
+
+  const handleStartEditCell = (c: CellGroup) => {
+    playTapSound();
+    setEditingCellId(c.id);
     setNewCell({
-      name: '',
-      neighborhood: '',
-      day: 'Quarta-feira',
-      hour: '20:00',
-      leader: '',
-      phone: '',
+      name: c.name,
+      neighborhood: c.neighborhood,
+      day: c.day,
+      hour: c.hour,
+      leader: c.leader,
+      phone: c.phone,
+      whatsappInstitutional: c.whatsappInstitutional || '',
+      memberCount: c.memberCount,
+      status: c.status || 'ativo',
     });
-    speakText('Grupo de conexão adicionado.');
+  };
+
+  const handleCancelEditCell = () => {
+    playTapSound();
+    setEditingCellId(null);
+    setNewCell(BLANK_CELL);
   };
 
   const handleDeleteCell = (cellId: string) => {
     playTapSound();
     const updatedCells = (currentEditingBrand.cellGroups || []).filter((c) => c.id !== cellId);
     handleFieldChange('cellGroups', updatedCells);
+    if (editingCellId === cellId) {
+      setEditingCellId(null);
+      setNewCell(BLANK_CELL);
+    }
   };
 
   // Slides Management
@@ -505,37 +602,62 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
         {/* Right Form Editor Panel */}
         <main className="flex-grow bg-[#f3f5f8] flex flex-col h-2/3 md:h-full overflow-hidden p-6">
           
-          {/* Tab Navigation */}
-          <div className="flex bg-white p-1.5 rounded-2xl shadow-sm border border-[#e1e4e8] mb-6 shrink-0 overflow-x-auto gap-1">
-            {[
-              { id: 'general', label: 'Dados Gerais', icon: 'info' },
-              { id: 'visual', label: 'Identidade Visual', icon: 'palette' },
-              { id: 'vocabulary', label: 'Vocabulário', icon: 'dictionary' },
-              { id: 'pastors', label: 'Pastores/Líderes', icon: 'groups' },
-              { id: 'cells', label: 'Células/GCs', icon: 'hub' },
-              { id: 'slides', label: 'Avisos/Carrossel', icon: 'view_carousel' },
-              { id: 'registrations', label: 'Cadastros & Solicitações', icon: 'list_alt' },
-              { id: 'contributions', label: 'Contribuições', icon: 'payments' },
-              { id: 'payments', label: 'Gateway de Pagamento', icon: 'credit_card' },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => {
-                  playTapSound();
-                  setActiveTab(tab.id as ActiveTab);
-                }}
-                className={`flex items-center gap-1.5 px-4.5 py-2.5 rounded-xl font-bold transition-all text-xs uppercase tracking-wider cursor-pointer whitespace-nowrap ${
-                  activeTab === tab.id
-                    ? 'bg-slate-900 text-white shadow-sm'
-                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
-                }`}
-              >
-                <span className="material-symbols-outlined !text-lg">{tab.icon}</span>
-                <span>{tab.label}</span>
-              </button>
-            ))}
+          {/* Tab Navigation — nível 1: grupos */}
+          <div className="flex bg-white p-1.5 rounded-2xl shadow-sm border border-[#e1e4e8] shrink-0 overflow-x-auto gap-1">
+            {TAB_GROUPS.map((group) => {
+              const isActiveGroup = group.children
+                ? group.children.some((c) => c.id === activeTab)
+                : activeTab === group.id;
+              return (
+                <button
+                  key={group.id}
+                  type="button"
+                  onClick={() => {
+                    playTapSound();
+                    setActiveTab((group.children ? group.children[0].id : group.id) as ActiveTab);
+                  }}
+                  className={`flex items-center gap-1.5 px-4.5 py-2.5 rounded-xl font-bold transition-all text-xs uppercase tracking-wider cursor-pointer whitespace-nowrap ${
+                    isActiveGroup
+                      ? 'bg-slate-900 text-white shadow-sm'
+                      : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                >
+                  <span className="material-symbols-outlined !text-lg">{group.icon}</span>
+                  <span>{group.label}</span>
+                </button>
+              );
+            })}
           </div>
+
+          {/* Tab Navigation — nível 2: sub-abas do grupo ativo (quando houver) */}
+          {(() => {
+            const activeGroup = TAB_GROUPS.find((g) =>
+              g.children ? g.children.some((c) => c.id === activeTab) : g.id === activeTab
+            );
+            if (!activeGroup?.children) return <div className="mb-6" />;
+            return (
+              <div className="flex gap-1 mb-6 mt-2 shrink-0 overflow-x-auto">
+                {activeGroup.children.map((child) => (
+                  <button
+                    key={child.id}
+                    type="button"
+                    onClick={() => {
+                      playTapSound();
+                      setActiveTab(child.id);
+                    }}
+                    className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg font-bold transition-all text-[11px] uppercase tracking-wider cursor-pointer whitespace-nowrap ${
+                      activeTab === child.id
+                        ? 'bg-slate-200 text-slate-900'
+                        : 'text-slate-400 hover:text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined !text-sm">{child.icon}</span>
+                    <span>{child.label}</span>
+                  </button>
+                ))}
+              </div>
+            );
+          })()}
 
           {/* Form Fields Scrolling Area */}
           <div className="flex-grow bg-white border border-[#e1e4e8] rounded-3xl p-6 shadow-sm overflow-y-auto">
@@ -928,10 +1050,12 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
                   <span>Gerenciar Líderes / {currentEditingBrand.termPastors}</span>
                 </h3>
 
-                {/* Form to Add New Pastor */}
+                {/* Form to Add/Edit Pastor */}
                 <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-4">
-                  <h4 className="text-xs font-black text-slate-600 uppercase tracking-widest">Adicionar Novo Líder</h4>
-                  
+                  <h4 className="text-xs font-black text-slate-600 uppercase tracking-widest">
+                    {editingPastorId ? 'Editar Líder' : 'Adicionar Novo Líder'}
+                  </h4>
+
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <input
                       type="text"
@@ -942,17 +1066,62 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
                     />
                     <input
                       type="text"
-                      placeholder="Cargo ou Função (Ex: Coordenador)"
+                      placeholder="Cargo ou Função (Ex: Pastor, Rabino, Coordenador)"
                       value={newPastor.role}
                       onChange={(e) => setNewPastor(prev => ({ ...prev, role: e.target.value }))}
                       className="bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-semibold focus:border-slate-800 outline-none"
                     />
                     <input
                       type="text"
-                      placeholder="URL da Foto"
+                      placeholder="URL da Foto (opcional)"
                       value={newPastor.photoUrl}
                       onChange={(e) => setNewPastor(prev => ({ ...prev, photoUrl: e.target.value }))}
                       className="bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-semibold focus:border-slate-800 outline-none"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Telefone"
+                      value={newPastor.phone || ''}
+                      onChange={(e) => setNewPastor(prev => ({ ...prev, phone: e.target.value }))}
+                      className="bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-semibold focus:border-slate-800 outline-none"
+                    />
+                    <input
+                      type="text"
+                      placeholder="WhatsApp"
+                      value={newPastor.whatsapp || ''}
+                      onChange={(e) => setNewPastor(prev => ({ ...prev, whatsapp: e.target.value }))}
+                      className="bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-semibold focus:border-slate-800 outline-none"
+                    />
+                    <input
+                      type="email"
+                      placeholder="E-mail"
+                      value={newPastor.email || ''}
+                      onChange={(e) => setNewPastor(prev => ({ ...prev, email: e.target.value }))}
+                      className="bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-semibold focus:border-slate-800 outline-none"
+                    />
+                    <select
+                      value={newPastor.cellGroupId || ''}
+                      onChange={(e) => setNewPastor(prev => ({ ...prev, cellGroupId: e.target.value }))}
+                      className="bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-semibold focus:border-slate-800 outline-none"
+                    >
+                      <option value="">Sem vínculo com {currentEditingBrand.termConnect.toLowerCase()}</option>
+                      {(currentEditingBrand.cellGroups || []).map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={newPastor.status || 'ativo'}
+                      onChange={(e) => setNewPastor(prev => ({ ...prev, status: e.target.value as 'ativo' | 'inativo' }))}
+                      className="bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-semibold focus:border-slate-800 outline-none"
+                    >
+                      <option value="ativo">Status: Ativo</option>
+                      <option value="inativo">Status: Inativo</option>
+                    </select>
+                    <textarea
+                      placeholder="Observações (opcional)"
+                      value={newPastor.notes || ''}
+                      onChange={(e) => setNewPastor(prev => ({ ...prev, notes: e.target.value }))}
+                      className="bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-semibold focus:border-slate-800 outline-none md:col-span-3 resize-none h-16"
                     />
                   </div>
 
@@ -967,48 +1136,86 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
                       <span>Disponível para Plantão</span>
                     </label>
 
-                    <button
-                      type="button"
-                      onClick={handleAddPastor}
-                      className="bg-slate-900 text-white font-bold text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl cursor-pointer hover:bg-slate-800 shadow-sm active:scale-95"
-                    >
-                      Adicionar Líder
-                    </button>
+                    <div className="flex gap-2">
+                      {editingPastorId && (
+                        <button
+                          type="button"
+                          onClick={handleCancelEditPastor}
+                          className="bg-white text-slate-600 font-bold text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl cursor-pointer hover:bg-slate-100 border border-slate-300 active:scale-95"
+                        >
+                          Cancelar
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleSavePastor}
+                        className="bg-slate-900 text-white font-bold text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl cursor-pointer hover:bg-slate-800 shadow-sm active:scale-95"
+                      >
+                        {editingPastorId ? 'Salvar Alterações' : 'Adicionar Líder'}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
                 {/* Pastor List */}
                 <div className="space-y-3 pt-2">
                   <h4 className="text-xs font-black text-slate-500 uppercase tracking-widest">Líderes Cadastrados</h4>
-                  
+
                   {(!currentEditingBrand.pastors || currentEditingBrand.pastors.length === 0) ? (
                     <div className="text-center py-6 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 font-bold text-xs">
                       Nenhum líder cadastrado nesta unidade.
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {currentEditingBrand.pastors.map((p: any) => (
-                        <div key={p.id} className="bg-white border border-slate-200 p-3 rounded-2xl flex items-center justify-between gap-3 shadow-sm hover:border-slate-300 transition-colors">
-                          <div className="flex items-center gap-3 truncate">
-                            <img className="w-12 h-12 rounded-xl object-cover border border-slate-200" src={p.photoUrl} alt={p.name} />
-                            <div className="truncate">
-                              <h5 className="font-extrabold text-sm text-slate-800 truncate">{p.name}</h5>
-                              <p className="text-xs text-slate-400 font-bold truncate">{p.role}</p>
-                              <span className={`inline-block text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full mt-1 ${p.available ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
-                                {p.available ? 'No Templo (Disponível)' : 'Indisponível'}
-                              </span>
+                      {currentEditingBrand.pastors.map((p) => {
+                        const linkedCell = (currentEditingBrand.cellGroups || []).find((c) => c.id === p.cellGroupId);
+                        return (
+                          <div key={p.id} className="bg-white border border-slate-200 p-3 rounded-2xl flex items-center justify-between gap-3 shadow-sm hover:border-slate-300 transition-colors">
+                            <div className="flex items-center gap-3 truncate">
+                              <img className="w-12 h-12 rounded-xl object-cover border border-slate-200" src={p.photoUrl} alt={p.name} />
+                              <div className="truncate">
+                                <h5 className="font-extrabold text-sm text-slate-800 truncate">{p.name}</h5>
+                                <p className="text-xs text-slate-400 font-bold truncate">{p.role}</p>
+                                {(p.phone || p.whatsapp || p.email) && (
+                                  <p className="text-[10px] text-slate-400 font-semibold truncate">
+                                    {[p.phone, p.whatsapp && `WhatsApp: ${p.whatsapp}`, p.email].filter(Boolean).join(' · ')}
+                                  </p>
+                                )}
+                                {linkedCell && (
+                                  <p className="text-[10px] text-slate-400 font-semibold truncate">Vínculo: {linkedCell.name}</p>
+                                )}
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  <span className={`inline-block text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full ${p.available ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                                    {p.available ? 'No Templo (Disponível)' : 'Indisponível'}
+                                  </span>
+                                  <span className={`inline-block text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full ${(p.status || 'ativo') === 'ativo' ? 'bg-slate-100 text-slate-700' : 'bg-slate-200 text-slate-500'}`}>
+                                    {(p.status || 'ativo') === 'ativo' ? 'Ativo' : 'Inativo'}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditPastor(p)}
+                                className="w-8 h-8 rounded-full text-slate-400 hover:text-slate-800 hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer"
+                                title="Editar líder"
+                              >
+                                <span className="material-symbols-outlined !text-lg">edit</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeletePastor(p.id)}
+                                className="w-8 h-8 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center transition-colors cursor-pointer"
+                                title="Excluir líder"
+                              >
+                                <span className="material-symbols-outlined !text-lg">delete</span>
+                              </button>
                             </div>
                           </div>
-
-                          <button
-                            type="button"
-                            onClick={() => handleDeletePastor(p.id)}
-                            className="w-8 h-8 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center transition-colors cursor-pointer"
-                          >
-                            <span className="material-symbols-outlined !text-lg">delete</span>
-                          </button>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1023,14 +1230,16 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
                   <span>Gerenciar {currentEditingBrand.termConnects}</span>
                 </h3>
 
-                {/* Form to Add New Cell */}
+                {/* Form to Add/Edit Cell */}
                 <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-4">
-                  <h4 className="text-xs font-black text-slate-600 uppercase tracking-widest">Adicionar Novo Grupo</h4>
-                  
+                  <h4 className="text-xs font-black text-slate-600 uppercase tracking-widest">
+                    {editingCellId ? `Editar ${currentEditingBrand.termConnect}` : `Adicionar Novo(a) ${currentEditingBrand.termConnect}`}
+                  </h4>
+
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <input
                       type="text"
-                      placeholder="Nome da Célula/GC"
+                      placeholder={`Nome da(o) ${currentEditingBrand.termConnect}`}
                       value={newCell.name}
                       onChange={(e) => setNewCell(prev => ({ ...prev, name: e.target.value }))}
                       className="bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-semibold focus:border-slate-800 outline-none"
@@ -1065,20 +1274,53 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
                     />
                     <input
                       type="text"
-                      placeholder="Telefone de contato"
+                      placeholder="Telefone do líder (contato pessoal)"
                       value={newCell.phone}
                       onChange={(e) => setNewCell(prev => ({ ...prev, phone: e.target.value }))}
                       className="bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-semibold focus:border-slate-800 outline-none"
                     />
+                    <input
+                      type="text"
+                      placeholder="WhatsApp institucional (opcional)"
+                      value={newCell.whatsappInstitutional || ''}
+                      onChange={(e) => setNewCell(prev => ({ ...prev, whatsappInstitutional: e.target.value }))}
+                      title="Número dedicado para receber contatos do totem, sem expor o telefone pessoal do líder"
+                      className="bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-semibold focus:border-slate-800 outline-none"
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      placeholder="Nº de membros (opcional)"
+                      value={newCell.memberCount ?? ''}
+                      onChange={(e) => setNewCell(prev => ({ ...prev, memberCount: e.target.value ? Number(e.target.value) : undefined }))}
+                      className="bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-semibold focus:border-slate-800 outline-none"
+                    />
+                    <select
+                      value={newCell.status || 'ativo'}
+                      onChange={(e) => setNewCell(prev => ({ ...prev, status: e.target.value as 'ativo' | 'inativo' }))}
+                      className="bg-white border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-semibold focus:border-slate-800 outline-none"
+                    >
+                      <option value="ativo">Status: Ativo</option>
+                      <option value="inativo">Status: Inativo</option>
+                    </select>
                   </div>
 
-                  <div className="flex justify-end pt-2">
+                  <div className="flex justify-end gap-2 pt-2">
+                    {editingCellId && (
+                      <button
+                        type="button"
+                        onClick={handleCancelEditCell}
+                        className="bg-white text-slate-600 font-bold text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl cursor-pointer hover:bg-slate-100 border border-slate-300 active:scale-95"
+                      >
+                        Cancelar
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={handleAddCell}
+                      onClick={handleSaveCell}
                       className="bg-slate-900 text-white font-bold text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl cursor-pointer hover:bg-slate-800 shadow-sm active:scale-95"
                     >
-                      Adicionar Grupo
+                      {editingCellId ? 'Salvar Alterações' : 'Adicionar Grupo'}
                     </button>
                   </div>
                 </div>
@@ -1086,7 +1328,7 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
                 {/* Cell List */}
                 <div className="space-y-3 pt-2">
                   <h4 className="text-xs font-black text-slate-500 uppercase tracking-widest">Grupos Ativos</h4>
-                  
+
                   {(!currentEditingBrand.cellGroups || currentEditingBrand.cellGroups.length === 0) ? (
                     <div className="text-center py-6 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 font-bold text-xs">
                       Nenhum grupo ou célula cadastrado nesta unidade.
@@ -1103,15 +1345,39 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
                               <span>📅 {c.day} às {c.hour}</span>
                             </div>
                             <p className="text-xs text-slate-400 font-semibold">Líder: {c.leader} ({c.phone})</p>
+                            {c.whatsappInstitutional && (
+                              <p className="text-xs text-slate-400 font-semibold">WhatsApp institucional: {c.whatsappInstitutional}</p>
+                            )}
+                            <div className="flex flex-wrap gap-1 pt-1">
+                              {typeof c.memberCount === 'number' && (
+                                <span className="inline-block text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                                  {c.memberCount} {c.memberCount === 1 ? 'membro' : 'membros'}
+                                </span>
+                              )}
+                              <span className={`inline-block text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full ${(c.status || 'ativo') === 'ativo' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                                {(c.status || 'ativo') === 'ativo' ? 'Ativo' : 'Inativo'}
+                              </span>
+                            </div>
                           </div>
 
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteCell(c.id)}
-                            className="w-8 h-8 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center transition-colors cursor-pointer"
-                          >
-                            <span className="material-symbols-outlined !text-lg">delete</span>
-                          </button>
+                          <div className="flex items-center shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditCell(c)}
+                              className="w-8 h-8 rounded-full text-slate-400 hover:text-slate-800 hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer"
+                              title="Editar grupo"
+                            >
+                              <span className="material-symbols-outlined !text-lg">edit</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteCell(c.id)}
+                              className="w-8 h-8 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center transition-colors cursor-pointer"
+                              title="Excluir grupo"
+                            >
+                              <span className="material-symbols-outlined !text-lg">delete</span>
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
