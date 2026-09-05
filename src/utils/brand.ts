@@ -769,9 +769,15 @@ export async function deleteBrandConfig(churchId: string): Promise<{ error: stri
   return { error: error?.message || null };
 }
 
-// Domínio do hub central (link único que lista todas as igrejas/marcas).
-// Ajuste aqui se um domínio próprio for configurado no Vercel.
-export const CENTRAL_HOSTS = ['igreja-a-santuario-digital.vercel.app'];
+// Domínio do hub central (link único que lista todas as igrejas/marcas) +
+// domínios próprios da Central de cada organização (mesmo app, mesmo login
+// via CentralAdminGate — o que muda é qual conta loga e o que o RBAC libera
+// pra ela). Adicionar uma organização nova é só um alias de domínio + uma
+// linha aqui, sem duplicar app/projeto/banco.
+export const CENTRAL_HOSTS = [
+  'igreja-a-santuario-digital.vercel.app',
+  'central-ibmalphaville.vercel.app',
+];
 
 export function isCentralHost(): boolean {
   if (typeof window === 'undefined') return false;
