@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BrandConfig, getStoredBrands, saveStoredBrands } from '../utils/brand';
+import { BrandConfig, getStoredBrands, fetchBrandConfigRows, applyBrandConfigRows, saveBrandConfig, deleteBrandConfig } from '../utils/brand';
 import { Pastor, CellGroup, Slide } from '../types';
 import { playTapSound, playSuccessSound } from '../utils/audio';
 import { speakText } from '../utils/tts';
@@ -30,6 +30,8 @@ const GATEWAY_LABELS: Record<GatewayProvider, string> = {
 export default function AdminView({ onBack, brand: activeBrand, lang, profile }: AdminViewProps) {
   const isMaster = !profile || profile.role === 'master';
   const [allBrandsRaw, setAllBrands] = useState<Record<string, BrandConfig>>(() => getStoredBrands());
+  const [brandsLoading, setBrandsLoading] = useState(true);
+  const [savingBrand, setSavingBrand] = useState(false);
   // Perfis não-master só enxergam a própria igreja, mesmo que outras marcas
   // existam no localStorage — o RLS já bloqueia no banco; isto reforça na UI.
   const allBrands = isMaster || !profile?.brandId
@@ -57,6 +59,21 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
     // Master sees every church's contributions at once, so it needs every
     // church's totem labels too — non-master is scoped to its own church.
     void fetchTotemsMap(isMaster ? undefined : profile.brandId).then(setTotemsMap);
+
+    // Config real das igrejas (pastores, células, slides, identidade,
+    // vocabulário) vem de `brand_configs` no Supabase — RLS já restringe
+    // church_admin à própria linha, então master simplesmente recebe mais
+    // linhas de volta. `getStoredBrands()` acima só serve de esqueleto/seed
+    // pro paint inicial enquanto isso carrega.
+    let cancelled = false;
+    void fetchBrandConfigRows().then((rows) => {
+      if (cancelled) return;
+      setAllBrands((prev) => applyBrandConfigRows(prev, rows));
+      setBrandsLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -145,32 +162,49 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
     speakText('Nova igreja adicionada. Preencha as informações necessárias.');
   };
 
-  const handleDeleteBrand = (id: string) => {
+  const handleDeleteBrand = async (id: string) => {
     if (Object.keys(allBrands).length <= 1) {
       alert('Não é possível remover a última igreja do sistema.');
       return;
     }
-    if (confirm('Deseja realmente remover esta igreja do sistema?')) {
-      playTapSound();
-      setAllBrands((prev) => {
-        const updated = { ...prev };
-        delete updated[id];
-        return updated;
-      });
-      if (selectedBrandId === id) {
-        setSelectedBrandId(Object.keys(allBrands).filter((k) => k !== id)[0]);
-      }
-      speakText('Igreja removida com sucesso.');
-      void logAuditEvent('brand.delete', { targetType: 'brand', targetId: id, brandId: id });
+    if (!confirm('Deseja realmente remover esta igreja do sistema?')) return;
+
+    playTapSound();
+    // A linha só existe em brand_configs se essa igreja já tinha sido salva
+    // ao menos uma vez; apagar uma igreja hardcoded (seed) que nunca foi
+    // customizada não tem linha nenhuma pra remover — isso é esperado, não erro.
+    const { error } = await deleteBrandConfig(id);
+    if (error) {
+      alert(`Não foi possível remover a igreja: ${error}`);
+      return;
     }
+
+    setAllBrands((prev) => {
+      const updated = { ...prev };
+      delete updated[id];
+      return updated;
+    });
+    if (selectedBrandId === id) {
+      setSelectedBrandId(Object.keys(allBrands).filter((k) => k !== id)[0]);
+    }
+    speakText('Igreja removida com sucesso.');
+    void logAuditEvent('brand.delete', { targetType: 'brand', targetId: id, brandId: id });
   };
 
-  const handleSaveAll = (shouldRedirect: boolean = false) => {
+  const handleSaveAll = async (shouldRedirect: boolean = false) => {
+    setSavingBrand(true);
+    const { error } = await saveBrandConfig(selectedBrandId, currentEditingBrand);
+    setSavingBrand(false);
+
+    if (error) {
+      alert(`Não foi possível salvar: ${error}`);
+      return;
+    }
+
     playSuccessSound();
-    saveStoredBrands(allBrands);
     speakText('Configurações salvas no sistema!');
     void logAuditEvent('brand.save', { targetType: 'brand', targetId: selectedBrandId, brandId: selectedBrandId });
-    
+
     if (shouldRedirect) {
       if (currentEditingBrand.domain) {
         window.open(`https://${currentEditingBrand.domain}`, '_blank', 'noopener,noreferrer');
@@ -178,7 +212,7 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
         alert('Esta marca ainda não tem um domínio de totem dedicado configurado. Peça para configurarem um alias de domínio Vercel para ela.');
       }
     } else {
-      alert('Configurações salvas com sucesso localmente!');
+      alert('Configurações salvas com sucesso! O totem público já reflete essa mudança.');
     }
   };
 
@@ -349,20 +383,22 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => handleSaveAll(false)}
-            className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold px-4 py-2 rounded-xl transition-all cursor-pointer border border-slate-300 active:scale-95 text-sm"
+            disabled={savingBrand}
+            onClick={() => void handleSaveAll(false)}
+            className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-800 font-bold px-4 py-2 rounded-xl transition-all cursor-pointer border border-slate-300 active:scale-95 text-sm"
           >
             <span className="material-symbols-outlined !text-lg">save</span>
-            <span>Salvar</span>
+            <span>{savingBrand ? 'Salvando...' : 'Salvar'}</span>
           </button>
-          
+
           <button
             type="button"
-            onClick={() => handleSaveAll(true)}
-            className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 text-sm"
+            disabled={savingBrand}
+            onClick={() => void handleSaveAll(true)}
+            className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold px-4 py-2 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 text-sm"
           >
             <span className="material-symbols-outlined !text-lg animate-pulse">pageview</span>
-            <span>Salvar e Visualizar</span>
+            <span>{savingBrand ? 'Salvando...' : 'Salvar e Visualizar'}</span>
           </button>
 
           <div className="h-6 w-[1px] bg-slate-300 mx-2" />
@@ -390,8 +426,13 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
         {/* Left Church/Client List Sidebar */}
         <aside className="w-full md:w-80 bg-white border-r border-[#e1e4e8] flex flex-col h-1/3 md:h-full overflow-y-auto p-4 shrink-0">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-sm font-black uppercase text-slate-500 tracking-wider">
+            <h2 className="text-sm font-black uppercase text-slate-500 tracking-wider flex items-center gap-2">
               {isMaster ? 'Igrejas & Clientes' : 'Sua Igreja'}
+              {brandsLoading && (
+                <span className="material-symbols-outlined !text-base text-slate-400 animate-spin" title="Carregando configurações salvas...">
+                  progress_activity
+                </span>
+              )}
             </h2>
             {isMaster && (
               <button
@@ -447,7 +488,7 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleDeleteBrand(b.id);
+                        void handleDeleteBrand(b.id);
                       }}
                       className="w-8 h-8 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center transition-colors cursor-pointer"
                       title="Excluir"

@@ -1,4 +1,5 @@
 import { CellGroup, Pastor, Slide } from '../types';
+import { supabase } from '../lib/supabase';
 
 export interface BrandConfig {
   id: string;
@@ -670,53 +671,70 @@ export const brands: Record<string, BrandConfig> = {
   }
 };
 
+// Marcas embutidas no bundle (seed/fallback) — usadas para paint instantâneo
+// antes da configuração real chegar do Supabase, e como base para qualquer
+// campo que uma igreja ainda não tenha personalizado.
 export function getStoredBrands(): Record<string, BrandConfig> {
-  if (typeof window === 'undefined') return brands;
-  const stored = localStorage.getItem('santuario_brands');
-  if (stored) {
-    try {
-      const parsed = JSON.parse(stored);
-      const merged: Record<string, BrandConfig> = JSON.parse(JSON.stringify(brands));
-      let changed = false;
-      for (const key of Object.keys(parsed)) {
-        if (key === 'ymcactx' || key === 'imocarwash') {
-          delete parsed[key];
-          changed = true;
-          continue;
-        }
-        if (brands[key]) {
-          // Default brand: Keep all visual and system configurations from source code
-          // and only merge customizable operational/text fields if present
-          merged[key] = {
-            ...brands[key],
-            campusName: parsed[key].campusName ?? brands[key].campusName,
-            location: parsed[key].location ?? brands[key].location,
-            wifi: parsed[key].wifi ?? brands[key].wifi,
-            pixKey: parsed[key].pixKey ?? brands[key].pixKey,
-            pastors: parsed[key].pastors ?? brands[key].pastors,
-            cellGroups: parsed[key].cellGroups ?? brands[key].cellGroups,
-          };
-        } else {
-          // Custom dynamically created brand: Keep all parsed fields
-          merged[key] = parsed[key];
-        }
-      }
-      if (changed) {
-        localStorage.setItem('santuario_brands', JSON.stringify(parsed));
-      }
-      return merged;
-    } catch (e) {
-      console.error('Failed to parse stored brands:', e);
-    }
-  }
-  return brands;
+  return JSON.parse(JSON.stringify(brands));
 }
 
-
-export function saveStoredBrands(updatedBrands: Record<string, BrandConfig>) {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem('santuario_brands', JSON.stringify(updatedBrands));
+// Fonte de verdade real: tabela `brand_configs` (church-scoped por RLS —
+// master vê todas as linhas, church_admin só a própria). Cada linha guarda o
+// BrandConfig COMPLETO daquela igreja (não um diff); `applyBrandConfigRows`
+// aplica isso sobre o seed hardcoded, que sobra só pra igrejas ainda sem
+// nenhuma customização salva.
+export async function fetchBrandConfigRows(): Promise<Record<string, Partial<BrandConfig>>> {
+  const { data, error } = await supabase.from('brand_configs').select('id, config');
+  if (error || !data) {
+    console.error('Failed to fetch brand_configs:', error?.message);
+    return {};
   }
+  const rows: Record<string, Partial<BrandConfig>> = {};
+  for (const row of data as { id: string; config: Partial<BrandConfig> | null }[]) {
+    rows[row.id] = row.config || {};
+  }
+  return rows;
+}
+
+export function applyBrandConfigRows(
+  base: Record<string, BrandConfig>,
+  rows: Record<string, Partial<BrandConfig>>
+): Record<string, BrandConfig> {
+  const merged: Record<string, BrandConfig> = JSON.parse(JSON.stringify(base));
+  for (const [id, override] of Object.entries(rows)) {
+    merged[id] = merged[id]
+      ? { ...merged[id], ...override, id: merged[id].id, domain: merged[id].domain }
+      : ({ id, ...override } as BrandConfig);
+  }
+  return merged;
+}
+
+// Busca só a igreja pedida — usada pelo totem público (leitura anônima,
+// permitida pela policy `anon_select_brand_configs`), que não precisa da
+// lista inteira de igrejas.
+export async function fetchBrandConfigOverride(churchId: string): Promise<Partial<BrandConfig> | null> {
+  const { data, error } = await supabase
+    .from('brand_configs')
+    .select('config')
+    .eq('id', churchId)
+    .maybeSingle();
+  if (error) {
+    console.error('Failed to fetch brand_configs for', churchId, error.message);
+    return null;
+  }
+  return (data?.config as Partial<BrandConfig>) || null;
+}
+
+export async function saveBrandConfig(churchId: string, config: BrandConfig): Promise<{ error: string | null }> {
+  const { error } = await supabase
+    .from('brand_configs')
+    .upsert({ id: churchId, config, updated_at: new Date().toISOString() });
+  return { error: error?.message || null };
+}
+
+export async function deleteBrandConfig(churchId: string): Promise<{ error: string | null }> {
+  const { error } = await supabase.from('brand_configs').delete().eq('id', churchId);
+  return { error: error?.message || null };
 }
 
 // Domínio do hub central (link único que lista todas as igrejas/marcas).
