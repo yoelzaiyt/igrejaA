@@ -621,6 +621,16 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
     setState((prev) => ({ ...prev, value: val, customValue: '', step: 'method' }));
   };
 
+  // `customValue` guarda só os dígitos digitados (sem ponto/vírgula) e é
+  // sempre interpretado como CENTAVOS -- mesmo comportamento de máscara
+  // monetária de maquininha/caixa: digitar "1" "0" "0" forma R$ 1,00, não
+  // R$ 100,00. Bug anterior: o valor exibido era o dígito bruto e
+  // `parseFloat` tratava esses dígitos como reais inteiros/decimais (ex.:
+  // "1" virava R$1,00 em vez de R$0,01; "10" virava R$10,00 em vez de R$0,10).
+  const customValueCents = state.customValue ? parseInt(state.customValue, 10) : 0;
+  const customValueReais = customValueCents / 100;
+  const customValueDisplay = customValueReais.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
   const handleCustomValueKeyPress = (char: string) => {
     if (char === 'BACKSPACE') {
       setState((prev) => ({ ...prev, customValue: prev.customValue.slice(0, -1) }));
@@ -630,15 +640,15 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
       setState((prev) => ({ ...prev, customValue: '' }));
       return;
     }
-    
-    // limit custom value length
+
+    // limita a 7 dígitos de centavos (até R$ 99.999,99)
     if (state.customValue.length < 7) {
       setState((prev) => ({ ...prev, customValue: prev.customValue + char }));
     }
   };
 
   const handleCustomValueConfirm = () => {
-    const val = parseFloat(state.customValue);
+    const val = customValueReais;
     if (isNaN(val) || val <= 0) {
       alert('Por favor, informe um valor numérico válido.');
       return;
@@ -901,7 +911,7 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
                   </span>
                   
                   <div className="bg-white rounded-xl py-3 px-4 text-2xl font-black border border-slate-350 text-slate-800 tracking-tight flex items-center justify-center min-h-[58px] shadow-inner">
-                    R$ {state.customValue || '0'}
+                    R$ {customValueDisplay}
                   </div>
                 </div>
 
