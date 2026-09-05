@@ -60,7 +60,6 @@ interface DashboardViewProps {
 export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibility, brand, lang, onLanguageChange }: DashboardViewProps) {
   const [showPromo, setShowPromo] = useState(false);
   const [showYmcaQrModal, setShowYmcaQrModal] = useState(false);
-  const [showAppModal, setShowAppModal] = useState(false);
 
   const handleSelect = (view: ViewState, options?: { step?: 'category' | 'value'; category?: string }) => {
     playTapSound();
@@ -468,103 +467,7 @@ export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibil
           <span>{brand.termPastoral}</span>
         </button>
 
-        {/* App institucional (QR Code) — só aparece se a marca tiver appLinks configurado */}
-        {brand.appLinks && (
-          <button
-            type="button"
-            onClick={() => {
-              playTapSound();
-              setShowAppModal(true);
-            }}
-            className={`flex items-center justify-center gap-3 text-white rounded-full px-5 sm:px-7 lg:px-10 h-20 transition-all duration-300 cursor-pointer shadow-lg active:scale-95 font-black uppercase tracking-wider border border-white/20 hover:scale-[1.05] ${getFooterFontSizeClass('App')}`}
-            style={{
-              background: 'linear-gradient(135deg, #1e293b 0%, #334155 100%)',
-              boxShadow: '0 10px 25px rgba(30, 41, 59, 0.5)'
-            }}
-          >
-            <span className="material-symbols-outlined !text-3xl font-black">qr_code_2</span>
-            <span>App</span>
-          </button>
-        )}
-
       </footer>
-
-      {/* App Institucional QR Code Modal Overlay */}
-      {showAppModal && brand.appLinks && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/85 backdrop-blur-md p-6 select-none animate-fade-in">
-          <div className="bg-slate-900/95 text-white rounded-[2.5rem] w-full max-w-2xl shadow-2xl p-8 border border-white/10 text-center space-y-6 max-h-[90vh] overflow-y-auto relative">
-
-            <div className="space-y-2">
-              <img
-                src={brand.logoUrl}
-                alt={brand.name}
-                className={`h-16 object-contain mx-auto ${['atitude', 'ibmalphaville', 'lagoinha', 'universal', 'beityaacov', 'icconselheira'].includes(brand.id) ? 'logo-white' : ''}`}
-                referrerPolicy="no-referrer"
-              />
-              <h2 className="text-2xl md:text-3xl font-black tracking-tight text-white">
-                Tenha a {brand.name} com você
-              </h2>
-              <p className="text-sm text-slate-300 font-medium max-w-xl mx-auto leading-relaxed">
-                Aponte a câmera do seu celular para o QR Code e baixe o aplicativo oficial.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4">
-              {brand.appLinks.ios && (
-                <div className="flex flex-col items-center p-5 bg-white/5 border border-white/10 rounded-2xl space-y-4">
-                  <div className="bg-white p-2.5 rounded-xl shadow-inner">
-                    <img
-                      src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(brand.appLinks.ios)}`}
-                      alt="QR Code para baixar o app na App Store"
-                      className="w-[180px] h-[180px] object-contain"
-                      loading="lazy"
-                    />
-                  </div>
-                  <span className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-slate-800 text-white font-extrabold rounded-xl text-xs border border-white/5">
-                    <span className="material-symbols-outlined !text-base">phone_iphone</span>
-                    <span>App Store (iOS)</span>
-                  </span>
-                </div>
-              )}
-
-              {brand.appLinks.android && (
-                <div className="flex flex-col items-center p-5 bg-white/5 border border-white/10 rounded-2xl space-y-4">
-                  <div className="bg-white p-2.5 rounded-xl shadow-inner">
-                    <img
-                      src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(brand.appLinks.android)}`}
-                      alt="QR Code para baixar o app no Google Play"
-                      className="w-[180px] h-[180px] object-contain"
-                      loading="lazy"
-                    />
-                  </div>
-                  <span className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-slate-800 text-white font-extrabold rounded-xl text-xs border border-white/5">
-                    <span className="material-symbols-outlined !text-base">android</span>
-                    <span>Google Play (Android)</span>
-                  </span>
-                </div>
-              )}
-            </div>
-
-            <div className="pt-6">
-              <button
-                type="button"
-                onClick={() => {
-                  playTapSound();
-                  setShowAppModal(false);
-                }}
-                className="h-16 px-12 text-white font-extrabold text-lg rounded-full shadow-2xl hover:scale-105 active:scale-95 transition-transform inline-flex items-center gap-3 cursor-pointer"
-                style={{
-                  background: `linear-gradient(135deg, ${brand.primaryColor} 0%, ${brand.primaryColorHover} 100%)`,
-                }}
-              >
-                <span className="material-symbols-outlined !text-2xl font-bold">arrow_back</span>
-                <span>{t('back', lang)}</span>
-              </button>
-            </div>
-
-          </div>
-        </div>
-      )}
 
       {/* YMCA App / Locator QR Code Modal Overlay */}
       {showYmcaQrModal && (
