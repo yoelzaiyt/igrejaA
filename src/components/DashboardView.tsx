@@ -415,13 +415,13 @@ export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibil
       )}
 
       {/* Floating Glass Dock Footer */}
-      <footer className="fixed bottom-4 md:bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 md:gap-3 p-2 md:p-3 bg-white/10 backdrop-blur-2xl shadow-2xl rounded-[2.5rem] border border-white/20 max-w-[95vw] md:max-w-max overflow-x-auto scrollbar-none">
+      <footer className="fixed bottom-4 md:bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 md:gap-3 p-2 md:p-3 bg-white/10 backdrop-blur-2xl shadow-2xl rounded-[2.5rem] border border-white/20 max-w-[95vw] lg:max-w-max overflow-x-auto scrollbar-none">
         
         {/* Início */}
         <button
           type="button"
           onClick={handleHomeClick}
-          className={`flex items-center justify-center gap-3 text-white rounded-full px-10 h-20 transition-all duration-300 cursor-pointer shadow-lg active:scale-95 font-black uppercase tracking-wider border border-white/20 animate-home-pulse home-btn-hover ${getFooterFontSizeClass(t('home', lang))}`}
+          className={`flex items-center justify-center gap-3 text-white rounded-full px-5 sm:px-7 lg:px-10 h-20 transition-all duration-300 cursor-pointer shadow-lg active:scale-95 font-black uppercase tracking-wider border border-white/20 animate-home-pulse home-btn-hover ${getFooterFontSizeClass(t('home', lang))}`}
           style={{
             background: `linear-gradient(135deg, ${brand.primaryColor} 0%, ${brand.primaryColorHover} 100%)`,
             boxShadow: `0 10px 25px ${brand.primaryColor}55`
@@ -443,7 +443,7 @@ export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibil
                   category: brand.type === 'synagogue' ? 'Tsedaká Geral' : 'Oferta'
                 });
               }}
-              className={`flex items-center justify-center gap-3 text-white rounded-full px-10 h-20 transition-all duration-300 cursor-pointer shadow-lg active:scale-95 font-black uppercase tracking-wider border border-white/20 hover:scale-[1.05] ${getFooterFontSizeClass(promoText)}`}
+              className={`flex items-center justify-center gap-3 text-white rounded-full px-5 sm:px-7 lg:px-10 h-20 transition-all duration-300 cursor-pointer shadow-lg active:scale-95 font-black uppercase tracking-wider border border-white/20 hover:scale-[1.05] ${getFooterFontSizeClass(promoText)}`}
               style={{
                 background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
                 boxShadow: '0 10px 25px rgba(16, 185, 129, 0.4)'
@@ -459,7 +459,7 @@ export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibil
         <button
           type="button"
           onClick={() => handleSelect('pastoral')}
-          className={`flex items-center justify-center gap-3 text-white rounded-full px-10 h-20 transition-all duration-300 cursor-pointer shadow-lg active:scale-95 font-black uppercase tracking-wider border border-white/20 hover:scale-[1.05] ${getFooterFontSizeClass(brand.termPastoral)}`}
+          className={`flex items-center justify-center gap-3 text-white rounded-full px-5 sm:px-7 lg:px-10 h-20 transition-all duration-300 cursor-pointer shadow-lg active:scale-95 font-black uppercase tracking-wider border border-white/20 hover:scale-[1.05] ${getFooterFontSizeClass(brand.termPastoral)}`}
           style={{
             background: `linear-gradient(135deg, ${brand.primaryColorHover} 0%, ${brand.primaryColor} 100%)`,
             boxShadow: `0 10px 25px ${brand.primaryColor}40`
@@ -476,7 +476,7 @@ export default function DashboardView({ onSelectView, onGoHome, onOpenAccessibil
               playTapSound();
               setShowAppModal(true);
             }}
-            className={`flex items-center justify-center gap-3 text-white rounded-full px-10 h-20 transition-all duration-300 cursor-pointer shadow-lg active:scale-95 font-black uppercase tracking-wider border border-white/20 hover:scale-[1.05] ${getFooterFontSizeClass('App')}`}
+            className={`flex items-center justify-center gap-3 text-white rounded-full px-5 sm:px-7 lg:px-10 h-20 transition-all duration-300 cursor-pointer shadow-lg active:scale-95 font-black uppercase tracking-wider border border-white/20 hover:scale-[1.05] ${getFooterFontSizeClass('App')}`}
             style={{
               background: 'linear-gradient(135deg, #1e293b 0%, #334155 100%)',
               boxShadow: '0 10px 25px rgba(30, 41, 59, 0.5)'
