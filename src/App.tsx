@@ -14,7 +14,7 @@ import CentralAdminGate from './components/CentralAdminGate';
 import InactivityTimer from './components/InactivityTimer';
 import { playTapSound } from './utils/audio';
 import { speakText, setVoiceAssistEnabled } from './utils/tts';
-import { getCurrentBrand, isCentralHost } from './utils/brand';
+import { BrandConfig, getCurrentBrand, fetchBrandConfigOverride, isCentralHost } from './utils/brand';
 import { translateBrandTerms, Lang } from './utils/i18n';
 import { getOrResolveTotemId } from './utils/totem';
 
@@ -52,8 +52,23 @@ function TotemApp() {
   const [totemId, setTotemId] = useState<string | null>(null);
   const [paymentInFlight, setPaymentInFlight] = useState(false);
 
-  const rawBrand = getCurrentBrand();
+  const [rawBrand, setRawBrand] = useState<BrandConfig>(() => getCurrentBrand());
   const brand = translateBrandTerms(rawBrand, lang);
+
+  // A config hardcoded (pastores, células, slides, identidade, vocabulário)
+  // pinta a tela instantaneamente; a config real da igreja no Supabase
+  // (editada pela Central) chega logo em seguida e substitui os campos
+  // customizados, sem bloquear o boot do totem se a rede estiver lenta/fora.
+  useEffect(() => {
+    let cancelled = false;
+    fetchBrandConfigOverride(rawBrand.id).then((override) => {
+      if (cancelled || !override) return;
+      setRawBrand((prev) => ({ ...prev, ...override, id: prev.id, domain: prev.domain }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [rawBrand.id]);
 
   // Resolve this kiosk's device identity. Runs once at boot, and retries
   // whenever the shopper enters the donation flow if it's still unresolved —
