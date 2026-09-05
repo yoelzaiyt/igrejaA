@@ -46,6 +46,38 @@ export async function getAdminProfile(): Promise<AdminProfile | null> {
   return { id: data.id, role: data.role, brandId: data.brand_id, email: data.email };
 }
 
+export interface AuditLogEntry {
+  id: string;
+  actorEmail: string | null;
+  action: string;
+  createdAt: string;
+  metadata: Record<string, unknown> | null;
+}
+
+// RLS (church_scoped, Fase 4) já garante que church_admin só recebe
+// entradas da própria igreja -- não precisa repetir o filtro aqui.
+export async function fetchAuditLogs(targetType: string, targetId: string): Promise<AuditLogEntry[]> {
+  const { data, error } = await supabase
+    .from('audit_logs')
+    .select('id, actor_email, action, created_at, metadata')
+    .eq('target_type', targetType)
+    .eq('target_id', targetId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Failed to fetch audit logs:', error.message);
+    return [];
+  }
+
+  return (data || []).map((row) => ({
+    id: row.id,
+    actorEmail: row.actor_email,
+    action: row.action,
+    createdAt: row.created_at,
+    metadata: row.metadata,
+  }));
+}
+
 export async function logAuditEvent(action: string, details: {
   targetType?: string;
   targetId?: string;

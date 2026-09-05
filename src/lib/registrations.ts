@@ -1,5 +1,7 @@
 import { isSupabaseConfigured, supabase } from './supabase';
 
+export type RegistrationStatus = 'novo' | 'em_atendimento' | 'concluido';
+
 export interface TotemRegistration {
   id: string;
   name: string;
@@ -8,6 +10,9 @@ export interface TotemRegistration {
   type: string;
   brandId: string;
   date: string;
+  metadata?: Record<string, unknown> | null;
+  status?: RegistrationStatus;
+  assignedTo?: string | null;
 }
 
 const STORAGE_KEY = 'santuario_registrations';
@@ -40,6 +45,7 @@ export async function saveRegistration(registration: TotemRegistration): Promise
     type: registration.type,
     brand_id: registration.brandId,
     created_at: registration.date,
+    metadata: registration.metadata ?? null,
   });
 
   if (error) {
@@ -54,7 +60,7 @@ export async function fetchRegistrations(): Promise<TotemRegistration[]> {
 
   const { data, error } = await supabase
     .from('registrations')
-    .select('id, name, phone, email, type, brand_id, created_at')
+    .select('id, name, phone, email, type, brand_id, created_at, metadata, status, assigned_to')
     .order('created_at', { ascending: false });
 
   if (error) {
@@ -70,7 +76,28 @@ export async function fetchRegistrations(): Promise<TotemRegistration[]> {
     type: row.type,
     brandId: row.brand_id,
     date: row.created_at,
+    metadata: row.metadata,
+    status: (row.status as RegistrationStatus) || 'novo',
+    assignedTo: row.assigned_to,
   }));
+}
+
+// Requer a policy "authenticated_update_registrations" (Fase 4) -- sem ela,
+// o Postgres nega a escrita mesmo com o GRANT genérico já concedido antes.
+export async function updateRegistrationStatus(
+  id: string,
+  updates: { status?: RegistrationStatus; assignedTo?: string | null }
+): Promise<{ error: string | null }> {
+  const { error } = await supabase
+    .from('registrations')
+    .update({
+      ...(updates.status !== undefined ? { status: updates.status } : {}),
+      ...(updates.assignedTo !== undefined ? { assigned_to: updates.assignedTo } : {}),
+      status_updated_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+
+  return { error: error?.message || null };
 }
 
 export async function deleteRegistration(id: string): Promise<TotemRegistration[]> {

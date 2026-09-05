@@ -83,7 +83,8 @@ export default function MyCellView({ onBack, onGoHome, brand, lang }: MyCellView
       email: '-',
       type: `${brand.termConnect}: Solicitação de Localização`,
       brandId: brand.id,
-      date: new Date().toISOString()
+      date: new Date().toISOString(),
+      metadata: { cellGroupId: activeCellModal?.id || null, cellGroupName: activeCellModal?.name || null },
     };
 
     void saveRegistration(newReg);

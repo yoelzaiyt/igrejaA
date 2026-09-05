@@ -72,7 +72,8 @@ export default function NewMemberView({ onBack, onGoHome, brand, lang }: NewMemb
       email: form.email,
       type: brand.id === 'imocarwash' ? 'Ficha de Cliente (Envio Rápido)' : 'Quero ser Membro (Envio Rápido)',
       brandId: brand.id,
-      date: new Date().toISOString()
+      date: new Date().toISOString(),
+      metadata: { quick: true },
     };
 
     void saveRegistration(newReg);
@@ -119,7 +120,8 @@ export default function NewMemberView({ onBack, onGoHome, brand, lang }: NewMemb
         email: form.email,
         type: `Cadastro Completo: ${brand.termMember} (${form.city}, ${form.ageRange})`,
         brandId: brand.id,
-        date: new Date().toISOString()
+        date: new Date().toISOString(),
+        metadata: { city: form.city, ageRange: form.ageRange },
       };
 
       void saveRegistration(newReg);
