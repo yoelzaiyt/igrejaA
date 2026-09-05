@@ -82,7 +82,8 @@ export default function PastoralView({ onBack, onGoHome, onSelectView, brand, la
         ? 'Aconselhamento Rabínico'
         : 'Aconselhamento Pastoral',
       brandId: brand.id,
-      date: new Date().toISOString()
+      date: new Date().toISOString(),
+      metadata: { pastorId: selectedPastor?.id || null, pastorName: selectedPastor?.name || null },
     };
 
     void saveRegistration(newReg);

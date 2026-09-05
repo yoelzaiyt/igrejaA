@@ -378,7 +378,8 @@ export default function MinistryView({ onBack, onGoHome, brand, lang }: Ministry
       email: '-',
       type: `${brand.id === 'imocarwash' ? 'Plano/Clube' : brand.type === 'synagogue' ? 'Atividade' : 'Voluntariado'}: ${selectedMinistry?.name || ''}`,
       brandId: brand.id,
-      date: new Date().toISOString()
+      date: new Date().toISOString(),
+      metadata: { ministryId: selectedMinistry?.id || null, ministryName: selectedMinistry?.name || null },
     };
 
     void saveRegistration(newReg);

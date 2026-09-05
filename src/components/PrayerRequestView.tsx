@@ -67,7 +67,8 @@ export default function PrayerRequestView({ onBack, onGoHome, brand, lang }: Pra
       email: '-',
       type: (brand.id === 'ymcactx' || brand.id === 'imocarwash') ? `Fale Conosco: ${request.message.slice(0, 40)}...` : brand.type === 'synagogue' ? `Pedido de Rezas: ${request.message.slice(0, 40)}...` : `Pedido de Oração: ${request.message.slice(0, 40)}...`,
       brandId: brand.id,
-      date: new Date().toISOString()
+      date: new Date().toISOString(),
+      metadata: { message: request.message, isAnonymous: request.isAnonymous },
     };
 
     void saveRegistration(newReg);

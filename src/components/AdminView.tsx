@@ -4,12 +4,12 @@ import { Pastor, CellGroup, Slide } from '../types';
 import { playTapSound, playSuccessSound } from '../utils/audio';
 import { speakText } from '../utils/tts';
 import { Lang } from '../utils/i18n';
-import { clearRegistrations, deleteRegistration, fetchRegistrations, TotemRegistration } from '../lib/registrations';
+import { clearRegistrations, deleteRegistration, fetchRegistrations, updateRegistrationStatus, TotemRegistration, RegistrationStatus } from '../lib/registrations';
 import { fetchContributions, Contribution } from '../lib/contributions';
 import { fetchTotemsMap } from '../lib/totems';
 import { listGateways, saveGateway, testGateway, toggleGateway, GatewaySummary, GatewayProvider, PaymentMethod } from '../lib/paymentGateways';
 import { DEFAULT_WHATSAPP_NUMBER, openWhatsAppNotification } from '../utils/whatsapp';
-import { logAuditEvent, AdminProfile } from '../lib/auth';
+import { logAuditEvent, fetchAuditLogs, AdminProfile, AuditLogEntry } from '../lib/auth';
 
 interface AdminViewProps {
   onBack: () => void;
@@ -73,6 +73,52 @@ const TAB_GROUPS: TabGroup[] = [
   { id: 'payments', label: 'Gateway de Pagamento', icon: 'credit_card' },
 ];
 
+const REGISTRATION_STATUS_LABELS: Record<RegistrationStatus, string> = {
+  novo: 'Novo',
+  em_atendimento: 'Em Atendimento',
+  concluido: 'Concluído',
+};
+
+const REGISTRATION_STATUS_COLORS: Record<RegistrationStatus, string> = {
+  novo: 'bg-amber-100 text-amber-800',
+  em_atendimento: 'bg-blue-100 text-blue-800',
+  concluido: 'bg-emerald-100 text-emerald-800',
+};
+
+// Cada tela do totem grava um `metadata` com formato diferente (mensagem de
+// oração, célula de interesse, ministério, pastor chamado, cidade/faixa
+// etária) -- isso aqui só traduz os campos conhecidos em linhas legíveis
+// pro admin, sem precisar de uma tela dedicada por tipo de solicitação.
+function describeRegistrationMetadata(metadata: Record<string, unknown> | null | undefined): string[] {
+  if (!metadata) return [];
+  const lines: string[] = [];
+  if (typeof metadata.message === 'string' && metadata.message) {
+    lines.push(`Mensagem: "${metadata.message}"`);
+  }
+  if (typeof metadata.isAnonymous === 'boolean') {
+    lines.push(metadata.isAnonymous ? 'Pedido enviado como anônimo' : 'Pedido identificado');
+  }
+  if (typeof metadata.cellGroupName === 'string' && metadata.cellGroupName) {
+    lines.push(`Célula/GC de interesse: ${metadata.cellGroupName}`);
+  }
+  if (typeof metadata.ministryName === 'string' && metadata.ministryName) {
+    lines.push(`Ministério: ${metadata.ministryName}`);
+  }
+  if (typeof metadata.pastorName === 'string' && metadata.pastorName) {
+    lines.push(`Líder chamado: ${metadata.pastorName}`);
+  }
+  if (typeof metadata.city === 'string' && metadata.city) {
+    lines.push(`Cidade: ${metadata.city}`);
+  }
+  if (typeof metadata.ageRange === 'string' && metadata.ageRange) {
+    lines.push(`Faixa etária: ${metadata.ageRange}`);
+  }
+  if (metadata.quick === true) {
+    lines.push('Cadastro rápido (só e-mail informado)');
+  }
+  return lines;
+}
+
 const BLANK_CELL: Omit<CellGroup, 'id'> = {
   name: '',
   neighborhood: '',
@@ -98,6 +144,10 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
   const [selectedBrandId, setSelectedBrandId] = useState<string>(activeBrand.id);
   const [activeTab, setActiveTab] = useState<ActiveTab>('general');
   const [registrations, setRegistrations] = useState<TotemRegistration[]>([]);
+  const [expandedRegId, setExpandedRegId] = useState<string | null>(null);
+  const [regHistory, setRegHistory] = useState<Record<string, AuditLogEntry[]>>({});
+  const [regHistoryLoading, setRegHistoryLoading] = useState<string | null>(null);
+  const [assigneeDrafts, setAssigneeDrafts] = useState<Record<string, string>>({});
   const [contributions, setContributions] = useState<Contribution[]>([]);
   const [contributionStatusFilter, setContributionStatusFilter] = useState<string>('all');
   const [contributionMethodFilter, setContributionMethodFilter] = useState<string>('all');
@@ -401,6 +451,64 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
       .filter(Boolean)
       .join('\n');
     openWhatsAppNotification(number, message);
+  };
+
+  // Fluxo de status/responsável do módulo Cadastros & Solicitações (Fase 4).
+  const invalidateRegHistory = (regId: string) => {
+    setRegHistory((prev) => {
+      const updated = { ...prev };
+      delete updated[regId];
+      return updated;
+    });
+  };
+
+  const handleToggleRegDetails = (regId: string) => {
+    playTapSound();
+    const opening = expandedRegId !== regId;
+    setExpandedRegId(opening ? regId : null);
+    if (opening && !regHistory[regId]) {
+      setRegHistoryLoading(regId);
+      void fetchAuditLogs('registration', regId).then((entries) => {
+        setRegHistory((prev) => ({ ...prev, [regId]: entries }));
+        setRegHistoryLoading(null);
+      });
+    }
+  };
+
+  const handleUpdateRegStatus = async (reg: TotemRegistration, newStatus: RegistrationStatus) => {
+    const previousStatus = reg.status || 'novo';
+    if (previousStatus === newStatus) return;
+    const { error } = await updateRegistrationStatus(reg.id, { status: newStatus });
+    if (error) {
+      alert(`Não foi possível atualizar o status: ${error}`);
+      return;
+    }
+    setRegistrations((prev) => prev.map((r) => (r.id === reg.id ? { ...r, status: newStatus } : r)));
+    void logAuditEvent('registration.status_change', {
+      targetType: 'registration',
+      targetId: reg.id,
+      brandId: reg.brandId,
+      metadata: { from: previousStatus, to: newStatus },
+    });
+    invalidateRegHistory(reg.id);
+  };
+
+  const handleAssigneeBlur = async (reg: TotemRegistration) => {
+    const draft = assigneeDrafts[reg.id];
+    if (draft === undefined || draft === (reg.assignedTo || '')) return;
+    const { error } = await updateRegistrationStatus(reg.id, { assignedTo: draft || null });
+    if (error) {
+      alert(`Não foi possível salvar o responsável: ${error}`);
+      return;
+    }
+    setRegistrations((prev) => prev.map((r) => (r.id === reg.id ? { ...r, assignedTo: draft || null } : r)));
+    void logAuditEvent('registration.assign', {
+      targetType: 'registration',
+      targetId: reg.id,
+      brandId: reg.brandId,
+      metadata: { assignedTo: draft },
+    });
+    invalidateRegHistory(reg.id);
   };
 
   // Payment gateway management
@@ -1513,6 +1621,8 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
                             <th className="p-4">WhatsApp</th>
                             <th className="p-4">E-mail</th>
                             <th className="p-4">Tipo / Módulo</th>
+                            <th className="p-4">Status</th>
+                            <th className="p-4">Responsável</th>
                             <th className="p-4 text-center">Ações</th>
                           </tr>
                         </thead>
@@ -1520,43 +1630,108 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
                           {registrations.map((reg) => {
                             const dateFormatted = new Date(reg.date).toLocaleString('pt-BR');
                             const brandName = allBrands[reg.brandId]?.name || reg.brandId;
+                            const status = reg.status || 'novo';
+                            const detailLines = describeRegistrationMetadata(reg.metadata);
+                            const isExpanded = expandedRegId === reg.id;
                             return (
-                              <tr key={reg.id} className="hover:bg-slate-50/50 transition-colors">
-                                <td className="p-4 whitespace-nowrap text-slate-450">{dateFormatted}</td>
-                                <td className="p-4 font-bold text-slate-800">{brandName}</td>
-                                <td className="p-4 font-bold text-slate-800">{reg.name}</td>
-                                <td className="p-4 font-mono">{reg.phone}</td>
-                                <td className="p-4 font-mono">{reg.email}</td>
-                                <td className="p-4">
-                                  <span className="bg-slate-100 text-slate-800 text-[9px] font-black uppercase tracking-wider px-2.5 py-1 rounded-md border border-slate-200 inline-block">
-                                    {reg.type}
-                                  </span>
-                                </td>
-                                <td className="p-4 text-center">
-                                  <div className="flex items-center justify-center gap-1">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleNotifyWhatsApp(reg)}
-                                      className="w-8 h-8 rounded-full text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 flex items-center justify-center transition-colors cursor-pointer"
-                                      title="Notificar via WhatsApp"
+                              <React.Fragment key={reg.id}>
+                                <tr className="hover:bg-slate-50/50 transition-colors">
+                                  <td className="p-4 whitespace-nowrap text-slate-450">{dateFormatted}</td>
+                                  <td className="p-4 font-bold text-slate-800">{brandName}</td>
+                                  <td className="p-4 font-bold text-slate-800">{reg.name}</td>
+                                  <td className="p-4 font-mono">{reg.phone}</td>
+                                  <td className="p-4 font-mono">{reg.email}</td>
+                                  <td className="p-4">
+                                    <span className="bg-slate-100 text-slate-800 text-[9px] font-black uppercase tracking-wider px-2.5 py-1 rounded-md border border-slate-200 inline-block">
+                                      {reg.type}
+                                    </span>
+                                  </td>
+                                  <td className="p-4">
+                                    <select
+                                      value={status}
+                                      onChange={(e) => void handleUpdateRegStatus(reg, e.target.value as RegistrationStatus)}
+                                      className={`text-[10px] font-black uppercase tracking-wider px-2 py-1.5 rounded-lg border-0 cursor-pointer ${REGISTRATION_STATUS_COLORS[status]}`}
                                     >
-                                      <span className="material-symbols-outlined !text-lg">chat</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        playTapSound();
-                                        void logAuditEvent('registration.delete', { targetType: 'registration', targetId: reg.id, brandId: reg.brandId });
-                                        void deleteRegistration(reg.id).then(setRegistrations);
-                                      }}
-                                      className="w-8 h-8 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center transition-colors cursor-pointer"
-                                      title="Remover Registro"
-                                    >
-                                      <span className="material-symbols-outlined !text-lg">delete</span>
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
+                                      {(Object.keys(REGISTRATION_STATUS_LABELS) as RegistrationStatus[]).map((s) => (
+                                        <option key={s} value={s}>{REGISTRATION_STATUS_LABELS[s]}</option>
+                                      ))}
+                                    </select>
+                                  </td>
+                                  <td className="p-4">
+                                    <input
+                                      type="text"
+                                      placeholder="Ninguém"
+                                      value={assigneeDrafts[reg.id] ?? reg.assignedTo ?? ''}
+                                      onChange={(e) => setAssigneeDrafts((prev) => ({ ...prev, [reg.id]: e.target.value }))}
+                                      onBlur={() => void handleAssigneeBlur(reg)}
+                                      className="w-32 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-semibold focus:border-slate-800 outline-none"
+                                    />
+                                  </td>
+                                  <td className="p-4 text-center">
+                                    <div className="flex items-center justify-center gap-1">
+                                      {(detailLines.length > 0) && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleToggleRegDetails(reg.id)}
+                                          className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors cursor-pointer ${isExpanded ? 'text-slate-800 bg-slate-100' : 'text-slate-400 hover:text-slate-800 hover:bg-slate-100'}`}
+                                          title="Detalhes e histórico"
+                                        >
+                                          <span className="material-symbols-outlined !text-lg">{isExpanded ? 'expand_less' : 'expand_more'}</span>
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => handleNotifyWhatsApp(reg)}
+                                        className="w-8 h-8 rounded-full text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 flex items-center justify-center transition-colors cursor-pointer"
+                                        title="Notificar via WhatsApp"
+                                      >
+                                        <span className="material-symbols-outlined !text-lg">chat</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          playTapSound();
+                                          void logAuditEvent('registration.delete', { targetType: 'registration', targetId: reg.id, brandId: reg.brandId });
+                                          void deleteRegistration(reg.id).then(setRegistrations);
+                                        }}
+                                        className="w-8 h-8 rounded-full text-slate-400 hover:text-red-600 hover:bg-red-50 flex items-center justify-center transition-colors cursor-pointer"
+                                        title="Remover Registro"
+                                      >
+                                        <span className="material-symbols-outlined !text-lg">delete</span>
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                                {isExpanded && (
+                                  <tr className="bg-slate-50/70">
+                                    <td colSpan={9} className="p-4 space-y-3">
+                                      {detailLines.length > 0 && (
+                                        <div className="space-y-1">
+                                          <h5 className="text-[10px] font-black uppercase tracking-wider text-slate-500">Detalhes da solicitação</h5>
+                                          {detailLines.map((line, i) => (
+                                            <p key={i} className="text-slate-700 font-semibold">{line}</p>
+                                          ))}
+                                        </div>
+                                      )}
+                                      <div className="space-y-1">
+                                        <h5 className="text-[10px] font-black uppercase tracking-wider text-slate-500">Histórico</h5>
+                                        {regHistoryLoading === reg.id ? (
+                                          <p className="text-slate-400">Carregando...</p>
+                                        ) : (regHistory[reg.id] || []).length === 0 ? (
+                                          <p className="text-slate-400">Nenhuma alteração registrada ainda.</p>
+                                        ) : (
+                                          (regHistory[reg.id] || []).map((entry) => (
+                                            <p key={entry.id} className="text-slate-500">
+                                              {new Date(entry.createdAt).toLocaleString('pt-BR')} — <span className="text-slate-700">{entry.actorEmail || 'sistema'}</span> — {entry.action}
+                                              {entry.metadata ? ` (${JSON.stringify(entry.metadata)})` : ''}
+                                            </p>
+                                          ))
+                                        )}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </React.Fragment>
                             );
                           })}
                         </tbody>
