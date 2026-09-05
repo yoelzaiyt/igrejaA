@@ -35,6 +35,23 @@ export interface BrandConfig {
   badgeLabel: string;
   accentSplashColor: string;
   slides?: Slide[];
+  // Fotos institucionais por módulo do dashboard (tela "Como podemos ajudar
+  // você?") — opcional; quando ausente, cada card usa a imagem genérica
+  // padrão de MODULE_BG em DashboardView.tsx. Chaves batem com as usadas lá.
+  moduleBackgrounds?: {
+    newMember?: string;
+    donations?: string;
+    ministries?: string;
+    checkin?: string;
+    myCell?: string;
+    prayer?: string;
+  };
+  // Vitrine do app oficial da igreja (QR codes) — opcional; quando ausente,
+  // o botão/modal correspondente no rodapé do dashboard não aparece.
+  appLinks?: {
+    ios?: string;
+    android?: string;
+  };
 }
 
 export const brands: Record<string, BrandConfig> = {
@@ -667,7 +684,22 @@ export const brands: Record<string, BrandConfig> = {
         leader: 'Felipe & Carol',
         phone: '(11) 99988-7788',
       }
-    ]
+    ],
+    // Fotos institucionais reais/curadas especificamente para a IBM Alphaville
+    // (ver relatório da melhoria visual) — outras igrejas continuam com o
+    // MODULE_BG genérico padrão em DashboardView.tsx, inalterado.
+    moduleBackgrounds: {
+      newMember: '/images/ibm/dashboard/novo-membro.jpg',
+      donations: '/images/ibm/dashboard/generosidade.jpg',
+      ministries: '/images/ibm/dashboard/participar.jpg',
+      checkin: '/images/ibm/dashboard/celebracao.jpg',
+      myCell: '/images/ibm/dashboard/grupos.jpg',
+      prayer: '/images/ibm/dashboard/oracao.jpg',
+    },
+    appLinks: {
+      ios: 'https://apps.apple.com/us/app/id1467026014',
+      android: 'https://play.google.com/store/apps/details?id=br.com.inchurch.ibmemorialalphaville',
+    },
   }
 };
 
