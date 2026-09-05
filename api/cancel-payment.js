@@ -2,7 +2,7 @@
 // Tells Mercado Pago to void the payment and marks the ledger row canceled
 // right away, instead of leaving it `pending` until natural expiration.
 
-import { getActiveGateway, updateContributionStatus, getContributionByMpPaymentId, churchExists } from './_lib/supabaseAdmin.js';
+import { getActiveGateway, updateContributionStatus, getContributionByMpPaymentId, churchExists, recordAuditEvent } from './_lib/supabaseAdmin.js';
 import { getConnector } from './_lib/connectors/index.js';
 
 export default async function handler(req, res) {
@@ -18,6 +18,24 @@ export default async function handler(req, res) {
   }
   if (!brandId || !(await churchExists(brandId))) {
     res.status(400).json({ error: 'Invalid church' });
+    return;
+  }
+
+  // Tenant check BEFORE touching the provider: without this, a request
+  // carrying someone else's real payment id + a different brandId could
+  // cancel a stranger's PIX at Mercado Pago before we ever noticed the
+  // mismatch. `existing` must exist and belong to this church — create-
+  // payment.js always records the contribution before returning, so any
+  // legitimately cancelable PIX already has a row here.
+  const existing = await getContributionByMpPaymentId(String(id));
+  if (!existing || existing.church_id !== brandId) {
+    await recordAuditEvent({
+      action: 'payment.rejected_cancel_tenant_mismatch',
+      target_type: 'contribution',
+      target_id: String(id),
+      brand_id: brandId,
+    });
+    res.status(400).json({ error: 'Pagamento não encontrado para esta igreja' });
     return;
   }
 
@@ -44,8 +62,7 @@ export default async function handler(req, res) {
   // Never overwrite a payment that settled right as the shopper tapped
   // Cancelar — a race between "approved" arriving and this request must
   // never flip an already-approved contribution back to canceled.
-  const existing = await getContributionByMpPaymentId(String(id));
-  const alreadyTerminal = existing && ['approved', 'rejected', 'refunded', 'canceled'].includes(existing.status);
+  const alreadyTerminal = ['approved', 'rejected', 'refunded', 'canceled'].includes(existing.status);
   if (!alreadyTerminal) {
     await updateContributionStatus(String(id), {
       status: 'canceled',
