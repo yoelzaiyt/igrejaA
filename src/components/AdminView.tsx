@@ -10,6 +10,7 @@ import { fetchTotemsMap } from '../lib/totems';
 import { listGateways, saveGateway, testGateway, toggleGateway, GatewaySummary, GatewayProvider, PaymentMethod } from '../lib/paymentGateways';
 import { DEFAULT_WHATSAPP_NUMBER, openWhatsAppNotification } from '../utils/whatsapp';
 import { logAuditEvent, fetchAuditLogs, AdminProfile, AuditLogEntry } from '../lib/auth';
+import { listUsers, createUser, AdminUserRow, AssignableRole } from '../lib/users';
 
 interface AdminViewProps {
   onBack: () => void;
@@ -18,7 +19,7 @@ interface AdminViewProps {
   profile?: AdminProfile;
 }
 
-type ActiveTab = 'general' | 'visual' | 'vocabulary' | 'pastors' | 'cells' | 'slides' | 'registrations' | 'contributions' | 'payments';
+type ActiveTab = 'general' | 'visual' | 'vocabulary' | 'pastors' | 'cells' | 'slides' | 'registrations' | 'contributions' | 'payments' | 'users';
 
 const GATEWAY_LABELS: Record<GatewayProvider, string> = {
   mercadopago: 'Mercado Pago',
@@ -71,7 +72,15 @@ const TAB_GROUPS: TabGroup[] = [
   { id: 'registrations', label: 'Cadastros & Solicitações', icon: 'list_alt' },
   { id: 'contributions', label: 'Contribuições', icon: 'payments' },
   { id: 'payments', label: 'Gateway de Pagamento', icon: 'credit_card' },
+  { id: 'users', label: 'Usuários', icon: 'manage_accounts' },
 ];
+
+const ASSIGNABLE_ROLE_LABELS: Record<AssignableRole, string> = {
+  master: 'Master (ATHOS)',
+  church_admin: 'Administrador da Igreja',
+  campus_admin: 'Administrador de Campus',
+  viewer: 'Somente Leitura',
+};
 
 const REGISTRATION_STATUS_LABELS: Record<RegistrationStatus, string> = {
   novo: 'Novo',
@@ -161,6 +170,13 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
   const [gatewayBusy, setGatewayBusy] = useState<'testing' | 'saving' | null>(null);
   const [gatewayMessage, setGatewayMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  const [adminUsers, setAdminUsers] = useState<AdminUserRow[]>([]);
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserRole, setNewUserRole] = useState<AssignableRole>('church_admin');
+  const [userBusy, setUserBusy] = useState(false);
+  const [userMessage, setUserMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [createdTempPassword, setCreatedTempPassword] = useState<{ email: string; password: string } | null>(null);
+
   useEffect(() => {
     void fetchRegistrations().then(setRegistrations);
     void fetchContributions().then(setContributions);
@@ -187,6 +203,33 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
   useEffect(() => {
     void listGateways(selectedBrandId).then(setGateways);
   }, [selectedBrandId]);
+
+  useEffect(() => {
+    if (activeTab === 'users') {
+      void listUsers().then(setAdminUsers);
+    }
+  }, [activeTab, selectedBrandId]);
+
+  async function handleCreateUser() {
+    if (!newUserEmail.trim()) return;
+    setUserBusy(true);
+    setUserMessage(null);
+    setCreatedTempPassword(null);
+    const { tempPassword, error } = await createUser(
+      newUserEmail.trim(),
+      newUserRole,
+      newUserRole === 'master' ? undefined : selectedBrandId
+    );
+    setUserBusy(false);
+    if (error) {
+      setUserMessage({ type: 'error', text: error });
+      return;
+    }
+    setUserMessage({ type: 'success', text: 'Usuário criado.' });
+    setCreatedTempPassword({ email: newUserEmail.trim(), password: tempPassword! });
+    setNewUserEmail('');
+    void listUsers().then(setAdminUsers);
+  }
 
   // Selected brand state
   const currentEditingBrand = allBrands[selectedBrandId] || Object.values(allBrands)[0];
@@ -2122,6 +2165,118 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
                       className="bg-slate-900 text-white font-bold text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl cursor-pointer hover:bg-slate-800 disabled:opacity-50"
                     >
                       {gatewayBusy === 'saving' ? 'Salvando...' : 'Salvar e Ativar'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'users' && (
+              <div className="space-y-6 animate-fade-in">
+                <h3 className="text-lg font-black text-slate-800 border-b pb-2 border-slate-100 flex items-center gap-2">
+                  <span className="material-symbols-outlined text-slate-500">manage_accounts</span>
+                  <span>Usuários — {isMaster ? 'Plataforma' : currentEditingBrand.name}</span>
+                </h3>
+
+                <div className="space-y-3">
+                  <h4 className="text-xs font-black text-slate-500 uppercase tracking-widest">
+                    {isMaster ? 'Todos os Usuários' : 'Usuários da Sua Igreja'}
+                  </h4>
+                  {adminUsers.length === 0 ? (
+                    <div className="text-center py-8 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 font-bold text-xs">
+                      Nenhum usuário encontrado.
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-[10px] uppercase tracking-wider text-slate-400 font-black">
+                            <th className="p-3">E-mail</th>
+                            <th className="p-3">Papel</th>
+                            {isMaster && <th className="p-3">Igreja</th>}
+                            <th className="p-3">Criado em</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {adminUsers.map((u) => (
+                            <tr key={u.id} className="border-t border-slate-100">
+                              <td className="p-3 font-semibold text-slate-700">{u.email}</td>
+                              <td className="p-3 text-slate-500 font-medium">
+                                {ASSIGNABLE_ROLE_LABELS[u.role as AssignableRole] || u.role}
+                              </td>
+                              {isMaster && <td className="p-3 text-slate-500 font-medium">{u.brandId || '—'}</td>}
+                              <td className="p-3 text-slate-400 text-xs">{new Date(u.createdAt).toLocaleDateString('pt-BR')}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-4">
+                  <h4 className="text-xs font-black text-slate-600 uppercase tracking-widest">Criar Novo Usuário</h4>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <label className="text-xs uppercase tracking-wider font-extrabold text-slate-500">E-mail</label>
+                      <input
+                        type="email"
+                        value={newUserEmail}
+                        onChange={(e) => setNewUserEmail(e.target.value)}
+                        placeholder="usuario@exemplo.com"
+                        className="w-full bg-white border border-slate-300 rounded-xl p-3 text-slate-800 font-semibold text-sm"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs uppercase tracking-wider font-extrabold text-slate-500">Papel</label>
+                      <select
+                        value={newUserRole}
+                        onChange={(e) => setNewUserRole(e.target.value as AssignableRole)}
+                        className="w-full bg-white border border-slate-300 rounded-xl p-3 text-slate-800 font-semibold text-sm"
+                      >
+                        {isMaster && <option value="master">Master (ATHOS)</option>}
+                        <option value="church_admin">Administrador da Igreja</option>
+                        <option value="campus_admin">Administrador de Campus</option>
+                        <option value="viewer">Somente Leitura</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {!isMaster && (
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+                      Novo usuário será vinculado a {currentEditingBrand.name} automaticamente.
+                    </p>
+                  )}
+
+                  {userMessage && (
+                    <p className={`text-xs font-bold ${userMessage.type === 'success' ? 'text-emerald-600' : 'text-red-600'}`}>
+                      {userMessage.text}
+                    </p>
+                  )}
+
+                  {createdTempPassword && (
+                    <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 space-y-1">
+                      <p className="text-xs font-black text-amber-800 uppercase tracking-wider">
+                        Senha temporária — mostrada só agora, anote antes de sair
+                      </p>
+                      <p className="text-sm font-mono text-amber-900">
+                        {createdTempPassword.email}: {createdTempPassword.password}
+                      </p>
+                      <p className="text-[10px] text-amber-700 font-semibold">
+                        Recomende que o usuário troque a senha no primeiro acesso ("Esqueci minha senha" na tela de login).
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      disabled={userBusy || !newUserEmail.trim()}
+                      onClick={handleCreateUser}
+                      className="bg-slate-900 text-white font-bold text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl cursor-pointer hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      {userBusy ? 'Criando...' : 'Criar Usuário'}
                     </button>
                   </div>
                 </div>
