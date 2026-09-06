@@ -10,8 +10,28 @@
 // Evolution's own API enforces (see doc: global key manages instances,
 // instance token sends messages).
 
+const TIMEOUT_MS = 8000;
+
 function baseHeaders(apiKey) {
   return { apikey: apiKey, 'Content-Type': 'application/json' };
+}
+
+// A instância Evolution é um serviço externo self-hosted -- se estiver fora
+// do ar ou lenta, isso não pode travar a função serverless até o timeout do
+// próprio Vercel. Aborta em 8s e devolve um erro claro em vez de pendurar.
+async function fetchWithTimeout(url, options) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw Object.assign(new Error('Evolution API não respondeu a tempo (instância fora do ar ou muito lenta).'), { status: 504 });
+    }
+    throw Object.assign(new Error('Não foi possível conectar à Evolution API — verifique se a instância está no ar.'), { status: 502 });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function parseJsonSafely(res) {
@@ -23,7 +43,7 @@ async function parseJsonSafely(res) {
 }
 
 export async function createInstance({ apiUrl, apiKey }, { instanceName }) {
-  const res = await fetch(`${apiUrl}/instance/create`, {
+  const res = await fetchWithTimeout(`${apiUrl}/instance/create`, {
     method: 'POST',
     headers: baseHeaders(apiKey),
     body: JSON.stringify({ instanceName, integration: 'WHATSAPP-BAILEYS', qrcode: true }),
@@ -41,7 +61,7 @@ export async function createInstance({ apiUrl, apiKey }, { instanceName }) {
 }
 
 export async function getQrCode({ apiUrl, apiKey }, { instanceName }) {
-  const res = await fetch(`${apiUrl}/instance/connect/${encodeURIComponent(instanceName)}`, {
+  const res = await fetchWithTimeout(`${apiUrl}/instance/connect/${encodeURIComponent(instanceName)}`, {
     headers: baseHeaders(apiKey),
   });
   const data = await parseJsonSafely(res);
@@ -54,7 +74,7 @@ export async function getQrCode({ apiUrl, apiKey }, { instanceName }) {
 }
 
 export async function getConnectionState({ apiUrl, apiKey }, { instanceName }) {
-  const res = await fetch(`${apiUrl}/instance/connectionState/${encodeURIComponent(instanceName)}`, {
+  const res = await fetchWithTimeout(`${apiUrl}/instance/connectionState/${encodeURIComponent(instanceName)}`, {
     headers: baseHeaders(apiKey),
   });
   const data = await parseJsonSafely(res);
@@ -70,7 +90,7 @@ export async function sendText({ apiUrl }, { instanceName, instanceToken, to, me
   if (!instanceToken) {
     throw Object.assign(new Error('Instância sem token — reconecte o WhatsApp antes de enviar.'), { status: 400 });
   }
-  const res = await fetch(`${apiUrl}/message/sendText/${encodeURIComponent(instanceName)}`, {
+  const res = await fetchWithTimeout(`${apiUrl}/message/sendText/${encodeURIComponent(instanceName)}`, {
     method: 'POST',
     headers: baseHeaders(instanceToken),
     body: JSON.stringify({ number: to, text: message }),
@@ -87,7 +107,7 @@ export async function sendText({ apiUrl }, { instanceName, instanceToken, to, me
 
 export async function healthCheck({ apiUrl, apiKey }) {
   try {
-    const res = await fetch(apiUrl, { headers: baseHeaders(apiKey) });
+    const res = await fetchWithTimeout(apiUrl, { headers: baseHeaders(apiKey) });
     return res.status < 500;
   } catch {
     return false;
