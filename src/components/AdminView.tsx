@@ -11,6 +11,7 @@ import { listGateways, saveGateway, testGateway, toggleGateway, GatewaySummary, 
 import { DEFAULT_WHATSAPP_NUMBER, openWhatsAppNotification } from '../utils/whatsapp';
 import { logAuditEvent, fetchAuditLogs, AdminProfile, AuditLogEntry } from '../lib/auth';
 import { listUsers, createUser, AdminUserRow, AssignableRole } from '../lib/users';
+import { getMessagingConfig, createMessagingInstance, getMessagingStatus, getMessagingQrCode, sendTestMessage, MessagingConfig } from '../lib/messaging';
 
 interface AdminViewProps {
   onBack: () => void;
@@ -19,7 +20,7 @@ interface AdminViewProps {
   profile?: AdminProfile;
 }
 
-type ActiveTab = 'general' | 'visual' | 'vocabulary' | 'pastors' | 'cells' | 'slides' | 'registrations' | 'contributions' | 'payments' | 'users';
+type ActiveTab = 'general' | 'visual' | 'vocabulary' | 'pastors' | 'cells' | 'slides' | 'registrations' | 'contributions' | 'payments' | 'users' | 'whatsapp';
 
 const GATEWAY_LABELS: Record<GatewayProvider, string> = {
   mercadopago: 'Mercado Pago',
@@ -73,6 +74,7 @@ const TAB_GROUPS: TabGroup[] = [
   { id: 'contributions', label: 'Contribuições', icon: 'payments' },
   { id: 'payments', label: 'Gateway de Pagamento', icon: 'credit_card' },
   { id: 'users', label: 'Usuários', icon: 'manage_accounts' },
+  { id: 'whatsapp', label: 'WhatsApp', icon: 'chat' },
 ];
 
 const ASSIGNABLE_ROLE_LABELS: Record<AssignableRole, string> = {
@@ -177,6 +179,13 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
   const [userMessage, setUserMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [createdTempPassword, setCreatedTempPassword] = useState<{ email: string; password: string } | null>(null);
 
+  const [messagingConfig, setMessagingConfig] = useState<MessagingConfig>({ configured: false });
+  const [messagingQrCode, setMessagingQrCode] = useState<string | null>(null);
+  const [messagingBusy, setMessagingBusy] = useState<'connecting' | 'refreshing' | 'sending' | null>(null);
+  const [messagingMessage, setMessagingMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [testPhone, setTestPhone] = useState('');
+  const [testMessage, setTestMessage] = useState('Olá! Esta é uma mensagem de teste do Santuário Digital.');
+
   useEffect(() => {
     void fetchRegistrations().then(setRegistrations);
     void fetchContributions().then(setContributions);
@@ -209,6 +218,59 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
       void listUsers().then(setAdminUsers);
     }
   }, [activeTab, selectedBrandId]);
+
+  useEffect(() => {
+    if (activeTab === 'whatsapp') {
+      void getMessagingConfig(selectedBrandId).then(setMessagingConfig);
+      setMessagingQrCode(null);
+      setMessagingMessage(null);
+    }
+  }, [activeTab, selectedBrandId]);
+
+  async function handleConnectWhatsApp() {
+    setMessagingBusy('connecting');
+    setMessagingMessage(null);
+    if (!messagingConfig.configured) {
+      const { qrCodeBase64, error } = await createMessagingInstance(selectedBrandId);
+      setMessagingBusy(null);
+      if (error) {
+        setMessagingMessage({ type: 'error', text: error });
+        return;
+      }
+      setMessagingQrCode(qrCodeBase64);
+      void getMessagingConfig(selectedBrandId).then(setMessagingConfig);
+      return;
+    }
+    const { qrCodeBase64, error } = await getMessagingQrCode(selectedBrandId);
+    setMessagingBusy(null);
+    if (error) {
+      setMessagingMessage({ type: 'error', text: error });
+      return;
+    }
+    setMessagingQrCode(qrCodeBase64);
+  }
+
+  async function handleRefreshWhatsAppStatus() {
+    setMessagingBusy('refreshing');
+    const { status, phoneNumber } = await getMessagingStatus(selectedBrandId);
+    setMessagingBusy(null);
+    setMessagingConfig((prev) => ({ ...prev, status: status as MessagingConfig['status'], phoneNumber }));
+    if (status === 'connected') setMessagingQrCode(null);
+  }
+
+  async function handleSendTestMessage() {
+    if (!testPhone.trim() || !testMessage.trim()) return;
+    setMessagingBusy('sending');
+    setMessagingMessage(null);
+    const { success, error } = await sendTestMessage(selectedBrandId, testPhone.trim(), testMessage.trim());
+    setMessagingBusy(null);
+    if (!success) {
+      setMessagingMessage({ type: 'error', text: error || 'Falha ao enviar' });
+      return;
+    }
+    setMessagingMessage({ type: 'success', text: 'Mensagem enviada! Confira o WhatsApp de destino.' });
+    void getMessagingConfig(selectedBrandId).then(setMessagingConfig);
+  }
 
   async function handleCreateUser() {
     if (!newUserEmail.trim()) return;
@@ -2277,6 +2339,117 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
                       className="bg-slate-900 text-white font-bold text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl cursor-pointer hover:bg-slate-800 disabled:opacity-50"
                     >
                       {userBusy ? 'Criando...' : 'Criar Usuário'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'whatsapp' && (
+              <div className="space-y-6 animate-fade-in">
+                <h3 className="text-lg font-black text-slate-800 border-b pb-2 border-slate-100 flex items-center gap-2">
+                  <span className="material-symbols-outlined text-slate-500">chat</span>
+                  <span>WhatsApp — {currentEditingBrand.name}</span>
+                </h3>
+
+                <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-3">
+                  <h4 className="text-xs font-black text-slate-600 uppercase tracking-widest">Status</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                    <div>
+                      <p className="text-[10px] text-slate-400 uppercase font-bold">Provedor</p>
+                      <p className="font-bold text-slate-700">Evolution API</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-slate-400 uppercase font-bold">Instância</p>
+                      <p className="font-bold text-slate-700">{messagingConfig.instanceName || '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-slate-400 uppercase font-bold">Status</p>
+                      <p className={`font-bold ${messagingConfig.status === 'connected' ? 'text-emerald-600' : messagingConfig.status === 'connecting' ? 'text-amber-600' : 'text-slate-500'}`}>
+                        {messagingConfig.status === 'connected' ? 'Conectado' : messagingConfig.status === 'connecting' ? 'Conectando' : 'Desconectado'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-slate-400 uppercase font-bold">Número</p>
+                      <p className="font-bold text-slate-700">{messagingConfig.phoneNumber ? `•••• ${messagingConfig.phoneNumber.slice(-4)}` : '—'}</p>
+                    </div>
+                  </div>
+                  {messagingConfig.lastTestedAt && (
+                    <p className="text-[10px] text-slate-400 font-semibold">
+                      Último teste: {new Date(messagingConfig.lastTestedAt).toLocaleString('pt-BR')} — {messagingConfig.lastTestResult === 'success' ? '✓ sucesso' : '✕ falha'}
+                    </p>
+                  )}
+
+                  <div className="flex gap-3">
+                    {messagingConfig.status !== 'connected' && (
+                      <button
+                        type="button"
+                        disabled={messagingBusy !== null}
+                        onClick={handleConnectWhatsApp}
+                        className="bg-slate-900 text-white font-bold text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl cursor-pointer hover:bg-slate-800 disabled:opacity-50"
+                      >
+                        {messagingBusy === 'connecting' ? 'Gerando QR...' : messagingConfig.configured ? 'Ver QR Code' : 'Conectar WhatsApp'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={messagingBusy !== null || !messagingConfig.configured}
+                      onClick={handleRefreshWhatsAppStatus}
+                      className="bg-slate-100 text-slate-700 font-bold text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl cursor-pointer hover:bg-slate-200 disabled:opacity-50"
+                    >
+                      {messagingBusy === 'refreshing' ? 'Verificando...' : 'Atualizar Status'}
+                    </button>
+                  </div>
+
+                  {messagingQrCode && (
+                    <div className="flex flex-col items-center gap-2 pt-2">
+                      <img src={messagingQrCode} alt="QR Code WhatsApp" className="w-48 h-48 border border-slate-200 rounded-xl" />
+                      <p className="text-[10px] text-slate-500 font-semibold text-center max-w-xs">
+                        Abra o WhatsApp no celular que vai representar esta igreja → Aparelhos conectados → Conectar um aparelho → aponte pra este QR Code.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-4">
+                  <h4 className="text-xs font-black text-slate-600 uppercase tracking-widest">Enviar Mensagem de Teste</h4>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <label className="text-xs uppercase tracking-wider font-extrabold text-slate-500">Telefone (DDD + número)</label>
+                      <input
+                        type="tel"
+                        value={testPhone}
+                        onChange={(e) => setTestPhone(e.target.value)}
+                        placeholder="11999999999"
+                        className="w-full bg-white border border-slate-300 rounded-xl p-3 text-slate-800 font-semibold text-sm"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs uppercase tracking-wider font-extrabold text-slate-500">Mensagem</label>
+                      <input
+                        type="text"
+                        value={testMessage}
+                        onChange={(e) => setTestMessage(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded-xl p-3 text-slate-800 font-semibold text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  {messagingMessage && (
+                    <p className={`text-xs font-bold ${messagingMessage.type === 'success' ? 'text-emerald-600' : 'text-red-600'}`}>
+                      {messagingMessage.text}
+                    </p>
+                  )}
+
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      disabled={messagingBusy !== null || !testPhone.trim() || !testMessage.trim()}
+                      onClick={handleSendTestMessage}
+                      className="bg-emerald-600 text-white font-bold text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl cursor-pointer hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      {messagingBusy === 'sending' ? 'Enviando...' : 'Enviar Mensagem de Teste'}
                     </button>
                   </div>
                 </div>
