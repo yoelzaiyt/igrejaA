@@ -547,7 +547,7 @@ export default function DonationView({ onBack, onGoHome, brand, lang, initialSte
         await fetchWithTimeout('/api/simulate-debit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'resolve', id: debitContributionId, outcome }),
+          body: JSON.stringify({ action: 'resolve', id: debitContributionId, outcome, brandId: brand.id }),
         });
       } catch (e) {
         console.error('Falha ao resolver tentativa de débito simulada:', e);

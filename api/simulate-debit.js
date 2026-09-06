@@ -3,7 +3,7 @@
 // a ledger row like every other method. This endpoint just records the
 // simulated attempt and its outcome; it never touches real money or PCI data.
 
-import { recordContributionReturning, updateContributionById, churchExists, totemBelongsToChurch, recordAuditEvent } from './_lib/supabaseAdmin.js';
+import { recordContributionReturning, churchExists, totemBelongsToChurch, recordAuditEvent, supabaseAdminFetch } from './_lib/supabaseAdmin.js';
 
 const OUTCOME_TO_STATUS = {
   approved: 'approved',
@@ -63,10 +63,10 @@ export default async function handler(req, res) {
   }
 
   if (action === 'resolve') {
-    const { id, outcome, errorDetail } = req.body || {};
+    const { id, outcome, errorDetail, brandId } = req.body || {};
     const status = OUTCOME_TO_STATUS[outcome];
-    if (!id || !status) {
-      res.status(400).json({ error: 'Invalid id or outcome' });
+    if (!id || !status || !brandId) {
+      res.status(400).json({ error: 'Invalid id, outcome or missing brandId' });
       return;
     }
 
@@ -76,7 +76,28 @@ export default async function handler(req, res) {
       patch.error_detail = errorDetail || (outcome === 'error' ? 'Erro simulado no terminal' : 'Recusado (simulação)');
     }
 
-    await updateContributionById(id, patch);
+    // Nunca confia só no id do payload — sem isso, qualquer chamador
+    // conseguiria resolver (inclusive marcar "approved") uma contribuição de
+    // OUTRA igreja ou de outro método de pagamento, só adivinhando/tendo o
+    // uuid. Escopado por id + church_id + method='debit' juntos: só resolve
+    // se as três coisas baterem, e devolve quantas linhas foram afetadas.
+    const r = await supabaseAdminFetch(
+      `contributions?id=eq.${encodeURIComponent(id)}&church_id=eq.${encodeURIComponent(brandId)}&method=eq.debit`,
+      { method: 'PATCH', headers: { Prefer: 'return=representation' }, body: JSON.stringify(patch) }
+    );
+    const updated = r.ok ? await r.json() : [];
+    if (!updated.length) {
+      await recordAuditEvent({
+        action: 'payment.rejected_resolve_tenant_mismatch',
+        target_type: 'contribution',
+        target_id: id,
+        brand_id: brandId,
+        metadata: { outcome },
+      });
+      res.status(400).json({ error: 'Simulação não encontrada para esta igreja' });
+      return;
+    }
+
     res.status(200).json({ success: true });
     return;
   }
