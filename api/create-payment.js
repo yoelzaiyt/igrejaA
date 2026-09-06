@@ -3,7 +3,7 @@
 // platform's shared Mercado Pago account when no church-specific gateway
 // is active. Runs server-side only: credentials never reach the browser.
 
-import { getActiveGateway, recordContribution, getContributionByIdempotencyKey, churchExists, totemBelongsToChurch, recordAuditEvent } from './_lib/supabaseAdmin.js';
+import { getActiveGateway, recordContribution, getContributionByIdempotencyKey, churchExists, totemBelongsToChurch, recordAuditEvent, checkRateLimit } from './_lib/supabaseAdmin.js';
 import { getConnector } from './_lib/connectors/index.js';
 
 export default async function handler(req, res) {
@@ -13,6 +13,17 @@ export default async function handler(req, res) {
   }
 
   const { method, amount, description, category, brandId, card, idempotencyKey, totemId } = req.body || {};
+
+  // Endpoint anônimo (visitante do totem, sem login) -- limita por IP pra
+  // impedir um script martelando criação de cobranças reais no Mercado
+  // Pago. 20 por 5 min é folgado pra uso real (várias pessoas doando no
+  // mesmo totem/rede) e aperta contra automação.
+  const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').split(',')[0].trim();
+  const rateOk = await checkRateLimit(`create-payment:${clientIp}`, 20, 300);
+  if (!rateOk) {
+    res.status(429).json({ error: 'Muitas tentativas de pagamento. Aguarde alguns minutos.' });
+    return;
+  }
 
   const transactionAmount = Number(amount);
   if (!transactionAmount || transactionAmount <= 0) {
