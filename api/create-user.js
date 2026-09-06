@@ -12,7 +12,7 @@
 
 import { randomBytes } from 'crypto';
 import { getAuthenticatedProfile } from './_lib/authGuard.js';
-import { supabaseAdminFetch, churchExists, recordAuditEvent } from './_lib/supabaseAdmin.js';
+import { supabaseAdminFetch, churchExists, recordAuditEvent, checkRateLimit } from './_lib/supabaseAdmin.js';
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -31,6 +31,15 @@ export default async function handler(req, res) {
   const caller = await getAuthenticatedProfile(req);
   if (!caller) {
     res.status(401).json({ error: 'Não autenticado' });
+    return;
+  }
+
+  // 20 criações por hora por admin -- generoso pro uso legítimo (nenhuma
+  // igreja cria dezenas de contas por hora), suficiente pra impedir um
+  // script automatizando criação de contas em massa.
+  const allowed = await checkRateLimit(`create-user:${caller.userId}`, 20, 3600);
+  if (!allowed) {
+    res.status(429).json({ error: 'Muitas tentativas de criação de usuário. Tente novamente mais tarde.' });
     return;
   }
 

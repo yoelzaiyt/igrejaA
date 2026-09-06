@@ -12,7 +12,7 @@
 // POST { action:'send', churchId, to, message }  -> envia mensagem de teste
 
 import { getAuthenticatedProfile, canManageChurch, canManageChurchConfig } from './_lib/authGuard.js';
-import { supabaseAdminFetch, getMessagingGateway, recordAuditEvent } from './_lib/supabaseAdmin.js';
+import { supabaseAdminFetch, getMessagingGateway, recordAuditEvent, checkRateLimit } from './_lib/supabaseAdmin.js';
 import { encryptCredentials } from './_lib/crypto.js';
 import { getMessagingProvider } from './_lib/messaging/index.js';
 
@@ -170,6 +170,14 @@ export default async function handler(req, res) {
 
   // ── POST { action: 'send' } — mensagem de teste ─────────────────────
   if (req.method === 'POST' && action === 'send') {
+    // 20 mensagens/hora por igreja -- suficiente pra teste/uso administrativo
+    // legítimo, mas impede que a instância vire um disparador de spam (o que
+    // além de abuso também arrisca o número real ser banido pelo WhatsApp).
+    const rateOk = await checkRateLimit(`messaging-send:${churchId}`, 20, 3600);
+    if (!rateOk) {
+      res.status(429).json({ error: 'Muitas mensagens enviadas nesta hora. Tente novamente mais tarde.' });
+      return;
+    }
     const { to, message } = req.body || {};
     const normalizedTo = normalizePhone(to);
     if (!normalizedTo) {

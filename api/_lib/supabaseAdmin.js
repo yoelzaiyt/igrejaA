@@ -148,6 +148,41 @@ export async function getMessagingGateway(churchId) {
   }
 }
 
+// Rate limit simples de janela fixa (não é perfeitamente atômico sob rajada
+// concorrente extrema, mas é suficiente pra deter abuso real num volume de
+// totem/Central admin -- não precisa de Redis/serviço externo novo).
+// Retorna true se a chamada é permitida (e já contabiliza), false se
+// estourou o limite.
+export async function checkRateLimit(key, maxRequests, windowSeconds) {
+  try {
+    const res = await supabaseAdminFetch(`rate_limits?key=eq.${encodeURIComponent(key)}&select=count,window_start`);
+    const rows = res.ok ? await res.json() : [];
+    const existing = rows[0];
+    const now = Date.now();
+
+    if (!existing || now - new Date(existing.window_start).getTime() > windowSeconds * 1000) {
+      await supabaseAdminFetch('rate_limits', {
+        method: 'POST',
+        headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify({ key, count: 1, window_start: new Date().toISOString() }),
+      });
+      return true;
+    }
+
+    if (existing.count >= maxRequests) return false;
+
+    await supabaseAdminFetch(`rate_limits?key=eq.${encodeURIComponent(key)}`, {
+      method: 'PATCH',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({ count: existing.count + 1 }),
+    });
+    return true;
+  } catch (err) {
+    console.error('checkRateLimit failed (failing open):', err);
+    return true; // uma falha no rate limiter não pode derrubar a funcionalidade real
+  }
+}
+
 export async function recordContribution(fields) {
   try {
     const r = await supabaseAdminFetch('contributions', {
