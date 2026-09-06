@@ -108,6 +108,46 @@ export async function getActiveGateway(churchId) {
   }
 }
 
+// Returns { id, provider, instanceName, instanceToken, status } for the
+// church's messaging gateway row, or null if none exists yet.
+export async function getMessagingGateway(churchId) {
+  if (!churchId) return null;
+  try {
+    const res = await supabaseAdminFetch(
+      `messaging_gateways?church_id=eq.${encodeURIComponent(churchId)}&select=id,provider,instance_name,instance_token_encrypted,instance_token_iv,instance_token_auth_tag,status,phone_number,is_active,last_tested_at,last_test_result&limit=1`
+    );
+    if (!res.ok) return null;
+    const rows = await res.json();
+    const row = rows[0];
+    if (!row) return null;
+
+    let instanceToken = null;
+    if (row.instance_token_encrypted) {
+      const decrypted = decryptCredentials({
+        ciphertext: row.instance_token_encrypted,
+        iv: row.instance_token_iv,
+        authTag: row.instance_token_auth_tag,
+      });
+      instanceToken = decrypted?.token || null;
+    }
+
+    return {
+      id: row.id,
+      provider: row.provider,
+      instanceName: row.instance_name,
+      instanceToken,
+      status: row.status,
+      phoneNumber: row.phone_number,
+      isActive: row.is_active,
+      lastTestedAt: row.last_tested_at,
+      lastTestResult: row.last_test_result,
+    };
+  } catch (err) {
+    console.error('Failed to load messaging gateway:', err);
+    return null;
+  }
+}
+
 export async function recordContribution(fields) {
   try {
     const r = await supabaseAdminFetch('contributions', {
