@@ -5,7 +5,7 @@
 import { encryptCredentials } from './_lib/crypto.js';
 import { supabaseAdminFetch, getActiveGateway } from './_lib/supabaseAdmin.js';
 import { getConnector } from './_lib/connectors/index.js';
-import { getAuthenticatedProfile, canManageChurch } from './_lib/authGuard.js';
+import { getAuthenticatedProfile, canManageChurch, canManageChurchConfig } from './_lib/authGuard.js';
 
 export default async function handler(req, res) {
   const profile = await getAuthenticatedProfile(req);
@@ -34,7 +34,9 @@ export default async function handler(req, res) {
   }
 
   const { action, churchId, provider, credentials, enabledMethods } = req.body || {};
-  if (!churchId || !canManageChurch(profile, churchId)) {
+  // Configurar/testar/ativar gateway é ação sensível -- campus_admin e
+  // viewer podem ver (GET acima), mas nunca escrever, mesmo na própria igreja.
+  if (!churchId || !canManageChurchConfig(profile, churchId)) {
     res.status(403).json({ error: 'Forbidden' });
     return;
   }

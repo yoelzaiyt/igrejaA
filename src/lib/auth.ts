@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 
 export interface AdminProfile {
   id: string;
-  role: 'master' | 'church_admin';
+  role: 'master' | 'church_admin' | 'campus_admin' | 'viewer';
   brandId: string | null;
   email: string | null;
 }

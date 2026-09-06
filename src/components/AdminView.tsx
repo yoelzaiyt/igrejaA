@@ -144,6 +144,10 @@ const BLANK_CELL: Omit<CellGroup, 'id'> = {
 
 export default function AdminView({ onBack, brand: activeBrand, lang, profile }: AdminViewProps) {
   const isMaster = !profile || profile.role === 'master';
+  // Espelha a mesma regra já aplicada no backend (RLS + authGuard): viewer
+  // nunca escreve, em lugar nenhum. Isso é só UX (esconder/desabilitar) --
+  // a permissão de verdade é decidida no servidor, não aqui.
+  const canWrite = !profile || profile.role !== 'viewer';
   const [allBrandsRaw, setAllBrands] = useState<Record<string, BrandConfig>>(() => getStoredBrands());
   const [brandsLoading, setBrandsLoading] = useState(true);
   const [savingBrand, setSavingBrand] = useState(false);
@@ -691,9 +695,14 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
         </div>
 
         <div className="flex items-center gap-2">
+          {!canWrite && (
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 bg-slate-100 px-3 py-1.5 rounded-full">
+              Somente leitura
+            </span>
+          )}
           <button
             type="button"
-            disabled={savingBrand}
+            disabled={savingBrand || !canWrite}
             onClick={() => void handleSaveAll(false)}
             className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-800 font-bold px-4 py-2 rounded-xl transition-all cursor-pointer border border-slate-300 active:scale-95 text-sm"
           >
@@ -703,7 +712,7 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
 
           <button
             type="button"
-            disabled={savingBrand}
+            disabled={savingBrand || !canWrite}
             onClick={() => void handleSaveAll(true)}
             className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold px-4 py-2 rounded-xl transition-all cursor-pointer shadow-md active:scale-95 text-sm"
           >
