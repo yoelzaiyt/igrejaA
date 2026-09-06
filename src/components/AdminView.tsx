@@ -477,7 +477,12 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
 
     playSuccessSound();
     speakText('Configurações salvas no sistema!');
-    void logAuditEvent('brand.save', { targetType: 'brand', targetId: selectedBrandId, brandId: selectedBrandId, metadata: { changes } });
+    // `alert()` congela TODO o event loop do JS (inclusive microtasks) até
+    // ser fechado -- um `void logAuditEvent(...)` sem await logo antes de um
+    // alert() nunca chega a disparar o fetch de verdade, porque a função
+    // async não teve nem uma volta do loop pra rodar antes de travar. Por
+    // isso precisa ser aguardado aqui, antes de qualquer alert() abaixo.
+    await logAuditEvent('brand.save', { targetType: 'brand', targetId: selectedBrandId, brandId: selectedBrandId, metadata: { changes } });
 
     if (shouldRedirect) {
       if (currentEditingBrand.domain) {
