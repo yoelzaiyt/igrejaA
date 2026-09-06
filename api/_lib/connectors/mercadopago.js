@@ -11,7 +11,12 @@ export async function createPayment(accessToken, { method, transactionAmount, de
       transaction_amount: transactionAmount,
       description: description || 'Contribuição via Totem',
       payment_method_id: 'pix',
-      payer: { email: payerEmail },
+      // O totem não coleta nome/CPF do doador (fluxo anônimo, de propósito —
+      // não vamos inventar um CPF real). first_name/last_name/external_reference
+      // são os campos documentados que dá pra preencher honestamente, e ajudam
+      // a rastrear a cobrança no painel do Mercado Pago por igreja/tentativa.
+      payer: { email: payerEmail, first_name: 'Doador', last_name: brandId || 'Totem' },
+      external_reference: idempotencyKey || undefined,
       // Keeps Mercado Pago's own expiration in sync with the UI's 5-minute
       // countdown — without this the QR technically stays payable forever
       // on MP's side, and MP never has anything to webhook about an
