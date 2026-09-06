@@ -4,7 +4,7 @@
 // session. Upsert-by-label is the minimal-friction approach that fits the
 // existing `totems` schema without a device-registration admin UI.
 
-import { supabaseAdminFetch, churchExists } from './_lib/supabaseAdmin.js';
+import { supabaseAdminFetch, churchExists, checkRateLimit } from './_lib/supabaseAdmin.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -15,6 +15,15 @@ export default async function handler(req, res) {
   const { churchId, label } = req.body || {};
   if (!churchId || !label) {
     res.status(400).json({ error: 'Missing churchId or label' });
+    return;
+  }
+
+  // Endpoint público (sem login) -- limita por IP pra impedir um script
+  // criando registros de totem em massa. 30/5min é folgado pro pareamento
+  // real de um kiosk (acontece uma vez por dispositivo, não em rajada).
+  const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').split(',')[0].trim();
+  if (!(await checkRateLimit(`resolve-totem:${clientIp}`, 30, 300))) {
+    res.status(429).json({ error: 'Muitas tentativas. Aguarde alguns minutos.' });
     return;
   }
   if (!(await churchExists(churchId))) {
