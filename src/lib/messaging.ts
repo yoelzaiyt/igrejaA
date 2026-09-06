@@ -19,14 +19,14 @@ async function authHeaders(): Promise<Record<string, string>> {
 
 export async function getMessagingConfig(churchId: string): Promise<MessagingConfig> {
   const headers = await authHeaders();
-  const res = await fetch(`/api/messaging-config?churchId=${encodeURIComponent(churchId)}`, { headers });
+  const res = await fetch(`/api/messaging?action=config&churchId=${encodeURIComponent(churchId)}`, { headers });
   if (!res.ok) return { configured: false };
   return res.json();
 }
 
 export async function createMessagingInstance(churchId: string): Promise<{ qrCodeBase64: string | null; error: string | null }> {
   const headers = await authHeaders();
-  const res = await fetch('/api/messaging-config', { method: 'POST', headers, body: JSON.stringify({ churchId }) });
+  const res = await fetch('/api/messaging', { method: 'POST', headers, body: JSON.stringify({ action: 'config', churchId }) });
   const data = await res.json();
   if (!res.ok) return { qrCodeBase64: null, error: data?.error || 'Falha ao criar instância' };
   return { qrCodeBase64: data.qrCodeBase64 || null, error: null };
@@ -34,7 +34,7 @@ export async function createMessagingInstance(churchId: string): Promise<{ qrCod
 
 export async function getMessagingStatus(churchId: string): Promise<{ status: string; phoneNumber: string | null }> {
   const headers = await authHeaders();
-  const res = await fetch(`/api/messaging-status?churchId=${encodeURIComponent(churchId)}`, { headers });
+  const res = await fetch(`/api/messaging?action=status&churchId=${encodeURIComponent(churchId)}`, { headers });
   if (!res.ok) return { status: 'disconnected', phoneNumber: null };
   const data = await res.json();
   return { status: data.status || 'disconnected', phoneNumber: data.phoneNumber || null };
@@ -42,7 +42,7 @@ export async function getMessagingStatus(churchId: string): Promise<{ status: st
 
 export async function getMessagingQrCode(churchId: string): Promise<{ qrCodeBase64: string | null; error: string | null }> {
   const headers = await authHeaders();
-  const res = await fetch(`/api/messaging-qrcode?churchId=${encodeURIComponent(churchId)}`, { headers });
+  const res = await fetch(`/api/messaging?action=qrcode&churchId=${encodeURIComponent(churchId)}`, { headers });
   const data = await res.json();
   if (!res.ok) return { qrCodeBase64: null, error: data?.error || 'Falha ao obter QR Code' };
   return { qrCodeBase64: data.qrCodeBase64 || null, error: null };
@@ -50,7 +50,7 @@ export async function getMessagingQrCode(churchId: string): Promise<{ qrCodeBase
 
 export async function sendTestMessage(churchId: string, to: string, message: string): Promise<{ success: boolean; error: string | null }> {
   const headers = await authHeaders();
-  const res = await fetch('/api/messaging-send', { method: 'POST', headers, body: JSON.stringify({ churchId, to, message }) });
+  const res = await fetch('/api/messaging', { method: 'POST', headers, body: JSON.stringify({ action: 'send', churchId, to, message }) });
   const data = await res.json();
   if (!res.ok) return { success: false, error: data?.error || 'Falha ao enviar mensagem' };
   return { success: true, error: null };
