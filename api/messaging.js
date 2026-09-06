@@ -11,7 +11,7 @@
 // GET  ?action=qrcode&churchId=...  -> QR Code fresco pra conectar
 // POST { action:'send', churchId, to, message }  -> envia mensagem de teste
 
-import { getAuthenticatedProfile, canManageChurch } from './_lib/authGuard.js';
+import { getAuthenticatedProfile, canManageChurch, canManageChurchConfig } from './_lib/authGuard.js';
 import { supabaseAdminFetch, getMessagingGateway, recordAuditEvent } from './_lib/supabaseAdmin.js';
 import { encryptCredentials } from './_lib/crypto.js';
 import { getMessagingProvider } from './_lib/messaging/index.js';
@@ -39,6 +39,13 @@ export default async function handler(req, res) {
 
   if (!churchId || !canManageChurch(profile, churchId)) {
     res.status(403).json({ error: 'Sem permissão para esta igreja' });
+    return;
+  }
+  // Conectar instância e enviar mensagem são ações sensíveis (a segunda
+  // literalmente usa o número/instância da igreja) -- campus_admin e viewer
+  // podem consultar status/QR (GET), mas nunca criar instância nem enviar.
+  if (req.method === 'POST' && !canManageChurchConfig(profile, churchId)) {
+    res.status(403).json({ error: 'Sem permissão para configurar ou enviar mensagens' });
     return;
   }
 

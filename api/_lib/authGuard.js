@@ -42,3 +42,14 @@ export function canManageChurch(profile, churchId) {
   if (!profile) return false;
   return profile.role === 'master' || profile.brandId === churchId;
 }
+
+// Matriz RBAC (ROLE × RESOURCE × ACTION) espelhando as policies de RLS —
+// master e church_admin administram configuração sensível (gateway de
+// pagamento, WhatsApp, dados gerais); campus_admin e viewer nunca podem,
+// mesmo dentro da própria igreja. Ver comentário no topo da migration
+// 20260906010000_rbac_granular_write.sql para a matriz completa.
+export function canManageChurchConfig(profile, churchId) {
+  if (!profile) return false;
+  if (profile.role === 'master') return true;
+  return profile.role === 'church_admin' && profile.brandId === churchId;
+}
