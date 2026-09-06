@@ -52,6 +52,36 @@ export interface AuditLogEntry {
   action: string;
   createdAt: string;
   metadata: Record<string, unknown> | null;
+  targetType?: string | null;
+  targetId?: string | null;
+  brandId?: string | null;
+}
+
+// Listagem geral (não filtrada por alvo específico) pra uma tela de
+// "Auditoria" -- RLS já garante master vê tudo, church_admin só a própria
+// igreja (o filtro por brand_id acontece no banco, não aqui).
+export async function fetchRecentAuditLogs(limit = 100): Promise<AuditLogEntry[]> {
+  const { data, error } = await supabase
+    .from('audit_logs')
+    .select('id, actor_email, action, created_at, metadata, target_type, target_id, brand_id')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error('Failed to fetch recent audit logs:', error.message);
+    return [];
+  }
+
+  return (data || []).map((row) => ({
+    id: row.id,
+    actorEmail: row.actor_email,
+    action: row.action,
+    createdAt: row.created_at,
+    metadata: row.metadata,
+    targetType: row.target_type,
+    targetId: row.target_id,
+    brandId: row.brand_id,
+  }));
 }
 
 // RLS (church_scoped, Fase 4) já garante que church_admin só recebe

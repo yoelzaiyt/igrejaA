@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BrandConfig, getStoredBrands, fetchBrandConfigRows, applyBrandConfigRows, saveBrandConfig, deleteBrandConfig } from '../utils/brand';
+import { BrandConfig, getStoredBrands, fetchBrandConfigRows, applyBrandConfigRows, saveBrandConfig, deleteBrandConfig, fetchBrandConfigOverride } from '../utils/brand';
 import { Pastor, CellGroup, Slide } from '../types';
 import { playTapSound, playSuccessSound } from '../utils/audio';
 import { speakText } from '../utils/tts';
@@ -9,7 +9,7 @@ import { fetchContributions, Contribution } from '../lib/contributions';
 import { fetchTotemsMap } from '../lib/totems';
 import { listGateways, saveGateway, testGateway, toggleGateway, GatewaySummary, GatewayProvider, PaymentMethod } from '../lib/paymentGateways';
 import { DEFAULT_WHATSAPP_NUMBER, openWhatsAppNotification } from '../utils/whatsapp';
-import { logAuditEvent, fetchAuditLogs, AdminProfile, AuditLogEntry } from '../lib/auth';
+import { logAuditEvent, fetchAuditLogs, fetchRecentAuditLogs, AdminProfile, AuditLogEntry } from '../lib/auth';
 import { listUsers, createUser, AdminUserRow, AssignableRole } from '../lib/users';
 import { getMessagingConfig, createMessagingInstance, getMessagingStatus, getMessagingQrCode, sendTestMessage, MessagingConfig } from '../lib/messaging';
 
@@ -20,7 +20,7 @@ interface AdminViewProps {
   profile?: AdminProfile;
 }
 
-type ActiveTab = 'general' | 'visual' | 'vocabulary' | 'pastors' | 'cells' | 'slides' | 'registrations' | 'contributions' | 'payments' | 'users' | 'whatsapp';
+type ActiveTab = 'general' | 'visual' | 'vocabulary' | 'pastors' | 'cells' | 'slides' | 'registrations' | 'contributions' | 'payments' | 'users' | 'whatsapp' | 'audit';
 
 const GATEWAY_LABELS: Record<GatewayProvider, string> = {
   mercadopago: 'Mercado Pago',
@@ -75,7 +75,25 @@ const TAB_GROUPS: TabGroup[] = [
   { id: 'payments', label: 'Gateway de Pagamento', icon: 'credit_card' },
   { id: 'users', label: 'Usuários', icon: 'manage_accounts' },
   { id: 'whatsapp', label: 'WhatsApp', icon: 'chat' },
+  { id: 'audit', label: 'Auditoria', icon: 'history' },
 ];
+
+const AUDIT_ACTION_LABELS: Record<string, string> = {
+  'auth.login': 'Login',
+  'auth.logout': 'Logout',
+  'brand.save': 'Salvou configurações da igreja',
+  'brand.delete': 'Removeu uma igreja',
+  'gateway.save': 'Configurou gateway de pagamento',
+  'gateway.toggle': 'Ativou/desativou gateway de pagamento',
+  'user.create': 'Criou usuário',
+  'registration.status_change': 'Mudou status de solicitação',
+  'registration.assign': 'Atribuiu responsável a solicitação',
+  'registration.delete': 'Excluiu solicitação',
+  'registrations.clear_all': 'Limpou todas as solicitações',
+  'whatsapp.test_send': 'Enviou mensagem de teste WhatsApp',
+  'payment.rejected_totem_tenant_mismatch': 'Pagamento rejeitado (totem/igreja incompatível)',
+  'payment.rejected_cancel_tenant_mismatch': 'Cancelamento de pagamento rejeitado (igreja incompatível)',
+};
 
 const ASSIGNABLE_ROLE_LABELS: Record<AssignableRole, string> = {
   master: 'Master (ATHOS)',
@@ -100,6 +118,34 @@ const REGISTRATION_STATUS_COLORS: Record<RegistrationStatus, string> = {
 // oração, célula de interesse, ministério, pastor chamado, cidade/faixa
 // etária) -- isso aqui só traduz os campos conhecidos em linhas legíveis
 // pro admin, sem precisar de uma tela dedicada por tipo de solicitação.
+// Diff informativo pra auditoria de "Salvar": compara pastores/células/
+// slides antes (o que está salvo no servidor agora) e depois (o que a tela
+// está prestes a gravar). Não é um audit log por sub-recurso de verdade
+// (isso exigiria persistir cada mudança individualmente, e brand_configs é
+// um único jsonb por igreja) -- é o diff mais honesto possível sem
+// reestruturar como o salvamento funciona.
+function describeBrandConfigChanges(before: Partial<BrandConfig> | null, after: BrandConfig): string[] {
+  const changes: string[] = [];
+  const countDiff = (label: string, beforeArr?: unknown[], afterArr?: unknown[]) => {
+    const b = beforeArr?.length || 0;
+    const a = afterArr?.length || 0;
+    if (a > b) changes.push(`${label}: +${a - b}`);
+    else if (a < b) changes.push(`${label}: -${b - a}`);
+  };
+  countDiff('pastores', before?.pastors, after.pastors);
+  countDiff('células', before?.cellGroups, after.cellGroups);
+  countDiff('slides', before?.slides, after.slides);
+  if (!before) return changes;
+  const colorFields: (keyof BrandConfig)[] = ['primaryColor', 'primaryColorHover', 'accentColor', 'glowColor', 'badgeBgColor', 'badgeTextColor', 'accentSplashColor', 'logoUrl', 'bgUrl'];
+  if (colorFields.some((f) => before[f] !== after[f])) changes.push('identidade visual');
+  const vocabFields: (keyof BrandConfig)[] = ['termPastor', 'termPastors', 'termPastoral', 'termCult', 'termCults', 'termDonation', 'termDonations', 'termConnect', 'termConnects', 'termMember'];
+  if (vocabFields.some((f) => before[f] !== after[f])) changes.push('vocabulário');
+  if (before.name !== after.name || before.whatsappNumber !== after.whatsappNumber || before.location !== after.location || before.wifi !== after.wifi || before.pixKey !== after.pixKey) {
+    changes.push('dados gerais');
+  }
+  return changes;
+}
+
 function describeRegistrationMetadata(metadata: Record<string, unknown> | null | undefined): string[] {
   if (!metadata) return [];
   const lines: string[] = [];
@@ -190,6 +236,9 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
   const [testPhone, setTestPhone] = useState('');
   const [testMessage, setTestMessage] = useState('Olá! Esta é uma mensagem de teste do Santuário Digital.');
 
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+
   useEffect(() => {
     void fetchRegistrations().then(setRegistrations);
     void fetchContributions().then(setContributions);
@@ -222,6 +271,16 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
       void listUsers().then(setAdminUsers);
     }
   }, [activeTab, selectedBrandId]);
+
+  useEffect(() => {
+    if (activeTab === 'audit') {
+      setAuditLoading(true);
+      void fetchRecentAuditLogs(150).then((rows) => {
+        setAuditLogs(rows);
+        setAuditLoading(false);
+      });
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     if (activeTab === 'whatsapp') {
@@ -400,6 +459,13 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
   };
 
   const handleSaveAll = async (shouldRedirect: boolean = false) => {
+    // Diff contra o que está realmente salvo agora (não contra o que a tela
+    // carregou no início da sessão) -- dá um audit log com o que de fato
+    // mudou nesta gravação (pastores/células/slides), em vez de só "salvou
+    // algo". Puramente informativo: não altera o que é gravado.
+    const before = await fetchBrandConfigOverride(selectedBrandId).catch(() => null);
+    const changes = describeBrandConfigChanges(before, currentEditingBrand);
+
     setSavingBrand(true);
     const { error } = await saveBrandConfig(selectedBrandId, currentEditingBrand);
     setSavingBrand(false);
@@ -411,7 +477,7 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
 
     playSuccessSound();
     speakText('Configurações salvas no sistema!');
-    void logAuditEvent('brand.save', { targetType: 'brand', targetId: selectedBrandId, brandId: selectedBrandId });
+    void logAuditEvent('brand.save', { targetType: 'brand', targetId: selectedBrandId, brandId: selectedBrandId, metadata: { changes } });
 
     if (shouldRedirect) {
       if (currentEditingBrand.domain) {
@@ -2462,6 +2528,54 @@ export default function AdminView({ onBack, brand: activeBrand, lang, profile }:
                     </button>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {activeTab === 'audit' && (
+              <div className="space-y-6 animate-fade-in">
+                <h3 className="text-lg font-black text-slate-800 border-b pb-2 border-slate-100 flex items-center gap-2">
+                  <span className="material-symbols-outlined text-slate-500">history</span>
+                  <span>Auditoria — {isMaster ? 'Todas as Igrejas' : currentEditingBrand.name}</span>
+                </h3>
+
+                {auditLoading ? (
+                  <div className="text-center py-8 text-slate-400 font-bold text-xs">Carregando...</div>
+                ) : auditLogs.length === 0 ? (
+                  <div className="text-center py-8 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 font-bold text-xs">
+                    Nenhum evento de auditoria registrado ainda.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-[10px] uppercase tracking-wider text-slate-400 font-black">
+                          <th className="p-3">Quando</th>
+                          <th className="p-3">Quem</th>
+                          {isMaster && <th className="p-3">Igreja</th>}
+                          <th className="p-3">Ação</th>
+                          <th className="p-3">Detalhes</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {auditLogs.map((log) => (
+                          <tr key={log.id} className="border-t border-slate-100 align-top">
+                            <td className="p-3 text-slate-400 text-xs whitespace-nowrap">{new Date(log.createdAt).toLocaleString('pt-BR')}</td>
+                            <td className="p-3 text-slate-600 font-medium text-xs">{log.actorEmail || '—'}</td>
+                            {isMaster && <td className="p-3 text-slate-500 font-medium text-xs">{log.brandId || '—'}</td>}
+                            <td className="p-3 font-bold text-slate-700 text-xs">{AUDIT_ACTION_LABELS[log.action] || log.action}</td>
+                            <td className="p-3 text-slate-400 text-[11px] max-w-xs">
+                              {log.metadata && Object.keys(log.metadata).length > 0 ? (
+                                Array.isArray((log.metadata as { changes?: string[] }).changes)
+                                  ? (log.metadata as { changes: string[] }).changes.join(', ') || '—'
+                                  : JSON.stringify(log.metadata)
+                              ) : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
 

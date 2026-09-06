@@ -4,7 +4,7 @@ import { getStoredBrands } from '../utils/brand';
 import { playTapSound, playSuccessSound } from '../utils/audio';
 import { speakText } from '../utils/tts';
 import { supabase } from '../lib/supabase';
-import { getAdminProfile, signInAdmin, signOutAdmin, requestPasswordReset, updateOwnPassword, AdminProfile } from '../lib/auth';
+import { getAdminProfile, signInAdmin, signOutAdmin, requestPasswordReset, updateOwnPassword, logAuditEvent, AdminProfile } from '../lib/auth';
 
 type AuthState = 'checking' | 'signed_out' | 'signed_in' | 'password_recovery';
 
@@ -65,6 +65,8 @@ export default function CentralAdminGate() {
     }
     playSuccessSound();
     speakText('Acesso administrativo autorizado.', true);
+    const loggedInProfile = await getAdminProfile();
+    void logAuditEvent('auth.login', { targetType: 'profile', targetId: loggedInProfile?.id, brandId: loggedInProfile?.brandId || undefined });
   };
 
   const handleForgotPassword = async (e: React.FormEvent) => {
@@ -112,6 +114,9 @@ export default function CentralAdminGate() {
 
   const handleLogout = async () => {
     playTapSound();
+    // Precisa logar ANTES do signOut -- depois disso a sessão já não existe
+    // e o insert em audit_logs (exige `authenticated`) seria negado.
+    await logAuditEvent('auth.logout', { targetType: 'profile', targetId: profile?.id, brandId: profile?.brandId || undefined });
     await signOutAdmin();
   };
 
